@@ -29,6 +29,16 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 
 ## Building
 
+If you are using Anvil, before compilation, the modules can be set up as:
+
+```bash
+module reset
+module load aocc/3.1.0 openmpi/4.1.6
+module load amdblis/3.0 amdlibflame/3.0 amdlibm/3.0 fftw
+
+```
+
+
 EDI is built as a plugin inside the QE source tree. Place this repository at `<QE-root>/edi-code/`:
 
 ```bash
@@ -45,14 +55,6 @@ To build only `edi.x` (assuming QE libraries are already compiled):
 ```bash
 cd src
 make
-```
-If you are using Anvil, before compilation, the modules can be set up as:
-
-```bash
-module reset
-module load aocc/3.1.0 openmpi/4.1.6
-module load amdblis/3.0 amdlibflame/3.0 amdlibm/3.0 fftw
-
 ```
 
 ## Workflow
