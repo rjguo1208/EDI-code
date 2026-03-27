@@ -11,10 +11,10 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 ## Features
 
 - **Electron-defect matrix elements** via the supercell difference-potential method: `M(k_i, k_f) = <psi_ki | V_defect - V_pristine | psi_kf>`, including both local and nonlocal (Kleinman-Bylander) contributions
-- **Double Fourier transform** from Bloch to Wannier representation `M(R, R')` for efficient interpolation to dense k-grids
-- **Wannier90 integration** for band interpolation (energies, velocities) and matrix element rotation
+- **Wannierization of matrix elements** from Bloch to Wannier representation `M(R, R')` for efficient interpolation to dense k-grids
+- **Wannier90 integration** for interpolation of band structure (energies, velocities) and matrix elements 
 - **SERTA and MRTA mobility** with irreducible Brillouin zone (IBZ) symmetry exploitation
-- **Multiple delta function methods**: triangular (2D), fixed Gaussian, and adaptive Gaussian (EPW-style velocity-dependent smearing)
+- **Multiple delta function methods**: triangular (2D), fixed Gaussian, and adaptive Gaussian (velocity-dependent smearing)
 - **Spin-orbit coupling (SOC)** support: two-component spinor wavefunctions, `dvan_so` nonlocal pseudopotentials, automatic detection from QE save files
 - **MPI parallelization** with pool-based (ki, kf) pair distribution and panel broadcast for memory-efficient wavefunction sharing
 - **Automated setup**: Python scripts generate all supercell and primitive cell inputs from a single `scf.in`
