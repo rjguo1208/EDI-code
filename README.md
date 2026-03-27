@@ -1,5 +1,9 @@
 # EDI: Electron-Defect Interaction
 
+<p align="center">
+  <img src="figs/edi.png" alt="EDI workflow" width="700">
+</p>
+
 A Quantum ESPRESSO plugin for computing electron-defect scattering matrix elements and carrier transport properties from first principles.
 
 EDI uses the supercell approach to extract defect perturbation potentials, Wannier interpolation to evaluate matrix elements on arbitrarily fine k-grids, and the Boltzmann transport equation (BTE) to compute defect-limited carrier mobility in both 2D and 3D materials.
@@ -365,6 +369,11 @@ M_local = sum_sigma integral psi*_{nk,sigma}(r) * Delta_V(r) * psi_{mk',sigma}(r
 
 The nonlocal contribution uses scalar-relativistic `D_{ij}` or fully-relativistic `D^{sigma,sigma'}_{ij}` (SOC) Kleinman-Bylander projectors.
 
+<p align="center">
+  <img src="figs/edmat.png" alt="Electron-defect matrix elements" width="600">
+</p>
+<p align="center"><em>Electron-defect matrix elements |M(k_i, k_f)|^2 for MoS2 with S vacancy, computed on the coarse k-grid.</em></p>
+
 ### Double Fourier Transform
 
 Matrix elements are transformed from Bloch to Wannier representation:
@@ -378,6 +387,11 @@ The inverse transform interpolates M to arbitrary fine k-grids:
 ```
 M_W(k,k') = sum_{R_e,R_p} exp(-ik*R_e) * exp(+ik'*R_p) * M(R_e, R_p) / (deg_e * deg_p)
 ```
+
+<p align="center">
+  <img src="figs/wannier_interp.png" alt="Wannier interpolation validation" width="500">
+</p>
+<p align="center"><em>Validation of Wannier-interpolated matrix elements (lines) against direct DFT calculation (dots) along the high-symmetry path Gamma-K-M-Gamma in MoS2.</em></p>
 
 ### Mobility
 
