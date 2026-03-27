@@ -1,4 +1,4 @@
-# EDI-2.0: Electron-Defect Interaction version 2.0
+# EDI: Electron-Defect Interaction
 
 <p align="center">
   <img src="figs/edi.png" alt="EDI workflow" width="600">
@@ -8,7 +8,7 @@ A Quantum ESPRESSO plugin for computing electron-defect scattering matrix elemen
 
 EDI uses the supercell approach to extract defect perturbation potentials, Wannier interpolation to evaluate matrix elements on arbitrarily fine k-grids, and the Boltzmann transport equation (BTE) to compute defect-limited carrier mobility in both 2D and 3D materials.
 
-## Features
+## Features of EDI version 2.0
 
 - **Electron-defect matrix elements** via the supercell difference-potential method: `M(k_i, k_f) = <psi_ki | V_defect - V_pristine | psi_kf>`, including both local and nonlocal (Kleinman-Bylander) contributions
 - **Wannierization of matrix elements** from Bloch to Wannier representation `M(R, R')` for efficient interpolation to dense k-grids
