@@ -385,7 +385,7 @@ The nonlocal contribution uses scalar-relativistic `D_{ij}` or fully-relativisti
 </p>
 <p align="center"><em>Electron-defect matrix elements |M(k_i, k_f)|^2 for MoS2 with S vacancy, wannier interpolated on the fine k-grid.</em></p>
 
-### Double Fourier Transform
+### Wannier Interpolation
 
 Matrix elements are transformed from Bloch to Wannier representation:
 
