@@ -1,4 +1,4 @@
-# EDI: Electron-Defect Interaction
+# EDI-2.0: Electron-Defect Interaction version 2.0
 
 <p align="center">
   <img src="figs/edi.png" alt="EDI workflow" width="600">
