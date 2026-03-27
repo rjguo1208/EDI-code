@@ -29,12 +29,12 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 
 ## Building
 
-EDI is built as a plugin inside the QE source tree. Place this repository at `<QE-root>/edi-dev/`:
+EDI is built as a plugin inside the QE source tree. Place this repository at `<QE-root>/edi-code/`:
 
 ```bash
 cd <QE-root>
-git clone <repo-url> edi-dev
-cd edi-dev
+git clone <repo-url> edi-code
+cd edi-code
 make
 ```
 
@@ -67,7 +67,7 @@ Use `gen_supercell.py` to automatically generate all QE input files from a primi
 # S vacancy in a 4x4x1 MoS2 supercell
 python script/gen_supercell.py \
     --input scf.in \
-    --nx 4 --ny 4 --nz 1 \
+    --nx 6 --ny 6 --nz 1 \
     --defect vacancy --site-species S \
     --nprocs 72 --output ./edi_run/
 ```
@@ -88,11 +88,11 @@ Supported defect types:
 
 ```bash
 # Vacancy (remove one atom)
-python script/gen_supercell.py --input scf.in --nx 4 --ny 4 --nz 1 \
+python script/gen_supercell.py --input scf.in --nx 6 --ny 6 --nz 1 \
     --defect vacancy --site-species S
 
 # Substitution (replace S with O)
-python script/gen_supercell.py --input scf.in --nx 4 --ny 4 --nz 1 \
+python script/gen_supercell.py --input scf.in --nx 6 --ny 6 --nz 1 \
     --defect substitution --site-species S \
     --new-species O --new-mass 15.999 --new-pseudo O_ONCV_PBE_FR-1.0.upf
 
@@ -108,8 +108,8 @@ python script/gen_supercell.py --input scf.in --nx 3 --ny 3 --nz 3 \
 ```bash
 # Primitive cell
 cd primitive
-mpirun -np 72 pw.x < scf.in  > scf.out
-mpirun -np 72 pw.x < nscf.in > nscf.out
+mpirun -np 72 pw.x -nk 8 < scf.in  > scf.out
+mpirun -np 72 pw.x -nk 8 < nscf.in > nscf.out
 
 # Supercells
 cd ../pristine_super
@@ -379,13 +379,13 @@ The nonlocal contribution uses scalar-relativistic `D_{ij}` or fully-relativisti
 Matrix elements are transformed from Bloch to Wannier representation:
 
 ```
-M(R_e, R_p) = (1/N_k^2) * sum_{k,k'} exp(+ik*R_e) * exp(-ik'*R_p) * U_dag(k) * M_B(k,k') * U(k')
+M(R, R') = (1/N_k^2) * sum_{k,k'} exp(+ik*R) * exp(-ik'*R') * U_dag(k) * M_B(k,k') * U(k')
 ```
 
 The inverse transform interpolates M to arbitrary fine k-grids:
 
 ```
-M_W(k,k') = sum_{R_e,R_p} exp(-ik*R_e) * exp(+ik'*R_p) * M(R_e, R_p) / (deg_e * deg_p)
+M_W(k,k') = sum_{R,R'} exp(-ik*R) * exp(+ik'*R') * M(R, R') / (deg_R* deg_R')
 ```
 
 <p align="center">
@@ -405,8 +405,7 @@ where `g_s = 2` (collinear, spin-degenerate) or `g_s = 1` (SOC), and the Fermi l
 
 ## References
 
-- R. Guo et al., "First-principles calculation of electron-defect interaction and defect-limited carrier mobility," (in preparation)
-- S. Ponce et al., "EPW: Electron-phonon coupling, transport and superconducting properties using maximally localized Wannier functions," [Comput. Phys. Commun. 209, 116 (2016)](https://doi.org/10.1016/j.cpc.2016.07.028)
+- X. XX et al., "EDI: Electron-defect interaction and defect-limited transport from first principle," (in preparation)
 - A. A. Mostofi et al., "An updated version of wannier90: A tool for obtaining maximally-localised Wannier functions," [Comput. Phys. Commun. 185, 2309 (2014)](https://doi.org/10.1016/j.cpc.2014.05.003)
 - P. Giannozzi et al., "Quantum ESPRESSO toward the exascale," [J. Chem. Phys. 152, 154105 (2020)](https://doi.org/10.1063/5.0005082)
 
