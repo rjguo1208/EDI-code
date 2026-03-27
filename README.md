@@ -1,8 +1,9 @@
-# EDI: Electron-Defect Interaction
 
 <p align="center">
   <img src="figs/edi.png" alt="EDI workflow" width="600">
 </p>
+
+# EDI: Electron-Defect Interaction
 
 A Quantum ESPRESSO plugin for computing electron-defect scattering matrix elements and carrier transport properties from first principles.
 
