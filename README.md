@@ -22,7 +22,7 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 
 ## Prerequisites
 
-- [Quantum ESPRESSO 7.5](https://www.quantum-espresso.org/) compiled with Wannier90 support
+- [Quantum ESPRESSO 7.5](https://www.quantum-espresso.org/) compiled with [Wannier90](https://wannier.org/)
 - MPI-enabled Fortran compiler (tested with AOCC 3.1.0, GCC, Intel)
 - FFTW3 library
 - Python 3 with NumPy (for setup scripts only)
