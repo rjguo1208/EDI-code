@@ -46,6 +46,14 @@ To build only `edi.x` (assuming QE libraries are already compiled):
 cd src
 make
 ```
+If you are using Anvil, before compilation, the modules can be set up as:
+
+```bash
+module reset
+module load aocc/3.1.0 openmpi/4.1.6
+module load amdblis/3.0 amdlibflame/3.0 amdlibm/3.0 fftw
+
+```
 
 ## Workflow
 
@@ -372,7 +380,7 @@ The nonlocal contribution uses scalar-relativistic `D_{ij}` or fully-relativisti
 <p align="center">
   <img src="figs/edmat.png" alt="Electron-defect matrix elements" width="600">
 </p>
-<p align="center"><em>Electron-defect matrix elements |M(k_i, k_f)|^2 for MoS2 with S vacancy, computed on the coarse k-grid.</em></p>
+<p align="center"><em>Electron-defect matrix elements |M(k_i, k_f)|^2 for MoS2 with S vacancy, wannier interpolated on the fine k-grid.</em></p>
 
 ### Double Fourier Transform
 
