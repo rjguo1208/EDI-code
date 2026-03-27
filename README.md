@@ -11,7 +11,7 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 ## Features
 
 - **Electron-defect matrix elements** via the supercell difference-potential method: `M(k_i, k_f) = <psi_ki | V_defect - V_pristine | psi_kf>`, including both local and nonlocal (Kleinman-Bylander) contributions
-- **Double Fourier transform** from Bloch to Wannier representation `M(R_e, R_p)` for efficient interpolation to dense k-grids
+- **Double Fourier transform** from Bloch to Wannier representation `M(R, R')` for efficient interpolation to dense k-grids
 - **Wannier90 integration** for band interpolation (energies, velocities) and matrix element rotation
 - **SERTA and MRTA mobility** with irreducible Brillouin zone (IBZ) symmetry exploitation
 - **Multiple delta function methods**: triangular (2D), fixed Gaussian, and adaptive Gaussian (EPW-style velocity-dependent smearing)
