@@ -1,0 +1,473 @@
+
+     Program EDI v.7.5 starts on 26Mar2026 at 22:51:54 
+
+     This program is part of the open-source Quantum ESPRESSO suite
+     for quantum simulation of materials; please cite
+         "P. Giannozzi et al., J. Phys.:Condens. Matter 21 395502 (2009);
+         "P. Giannozzi et al., J. Phys.:Condens. Matter 29 465901 (2017);
+         "P. Giannozzi et al., J. Chem. Phys. 152 154105 (2020);
+          URL http://www.quantum-espresso.org", 
+     in publications or presentations arising from this work. More details at
+     http://www.quantum-espresso.org/quote
+
+     Parallel version (MPI), running on   108 processors
+
+     MPI processes distributed on     1 nodes
+     K-points division:     npool     =     108
+     1004926 MiB available memory on the printing compute node when the environment starts
+ 
+
+     ============================================================
+     EDI — Electron-Defect Interaction
+     Wannierization mode
+     ============================================================
+     prefix  = mos2
+     outdir  = ../primitive/dout/
+     nbndsub =      5
+     k-grid  =   18  18   1
+     npool   =  108
+     Reading NSCF save data...
+
+     Reading xml data from directory:
+
+     ../primitive/dout/mos2.save/
+
+     IMPORTANT: XC functional enforced from input :
+     Exchange-correlation= PBE
+                           (   1   4   3   4   0   0   0)
+     Any further DFT definition will be discarded
+     Please, verify this is what you really want
+
+ 
+     G-vector sticks info
+     --------------------
+     sticks:   dense  smooth     PW     G-vecs:    dense   smooth      PW
+     Sum        1003    1003    361               192259   192259   41393
+ 
+     Using Slab Decomposition
+ 
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+  The code is running with the 2D cutoff
+  Please refer to:
+  Sohier, T., Calandra, M., & Mauri, F. (2017), 
+  Density functional perturbation theory for gated two-dimensional heterostructures:
+  Theoretical developments and application to flexural phonons in graphene.
+  Physical Review B, 96(7), 75448. https://doi.org/10.1103/PhysRevB.96.075448
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+     Reading collected, re-writing distributed wavefunctions
+     nkstot =    324
+     nks    =      3
+     nbnd   =     17
+
+     ============================================================
+     EDI: Running Wannier90 internally
+     ============================================================
+     Wrote mos2.win
+     k-grid:  18 x  18 x   1 (   324 k-points)
+     Setting up nearest-neighbor k-points...
+ 
+     Initial Wannier projections
+ 
+     (   0.66667   0.33333   0.50000) :  l =   2 mr =   1
+     (   0.66667   0.33333   0.50000) :  l =   2 mr =   2
+     (   0.66667   0.33333   0.50000) :  l =   2 mr =   3
+     (   0.66667   0.33333   0.50000) :  l =   2 mr =   4
+     (   0.66667   0.33333   0.50000) :  l =   2 mr =   5
+
+      - Number of bands is (  5)
+      - Number of total bands is ( 17)
+      - Number of excluded bands is ( 12)
+      - Number of wannier functions is (  5)
+      - All guiding functions are given 
+ 
+  Reading data about k-point neighbours 
+ 
+      - All neighbours are found 
+ 
+     Computing Ylm expansion...
+     Computing A (projection) matrix...
+     AMN
+      k points =   324 in  108 pools
+            1 of    3 on ionode
+            2 of    3 on ionode
+            3 of    3 on ionode
+ 
+     AMN calculated
+     Computing M (overlap) matrix...
+ 
+     MMN
+      k points =   324 in  108 pools
+            1 of    3 on ionode
+            2 of    3 on ionode
+            3 of    3 on ionode
+     MMN calculated
+     Writing eigenvalues...
+     Running Wannier90 minimization...
+ 
+     Wannier Function centers (cartesian, alat) and spreads (ang):
+ 
+     (   1.59259   0.91284  12.00000) :   4.90870
+     (   1.59259   0.40839  12.00000) :   5.20557
+     (   1.59259   1.43304  12.00000) :   5.20544
+     (   1.59259   0.67019  12.00000) :   5.06165
+     (   1.59259   1.17577  12.00000) :   5.08138
+ 
+     Wannier90 completed.
+       Number of Wannier functions:    5
+       Number of bands:    5
+       Total spread:      25.4627 Ang^2
+     ============================================================
+     Reading combined rotation from filukk...
+     Read Wannier data from filukk
+     nbndep=   5 n_wannier=   5 nkstot= 324
+     Read H(R) from mos2_hr.dat
+     nwann =    5, nrpts =    331
+
+     Validating: Wannier interpolation vs NSCF eigenvalues
+     --------------------------------------------------------
+       ik   ib      E_nscf(eV)       E_w90(eV)       Error(eV)
+        1    1       -5.936517       -5.936544        0.000027
+        1    2       -3.184301       -3.184296        0.000004
+        1    3       -3.184301       -3.184293        0.000008
+        1    4       -2.939154       -2.939159        0.000005
+        1    5       -2.939154       -2.939144        0.000010
+        2    1       -5.957750       -5.957749        0.000001
+        2    2       -3.253773       -3.253776        0.000003
+        2    3       -3.101817       -3.101818        0.000001
+        2    4       -3.073492       -3.073496        0.000004
+        2    5       -2.992062       -2.992067        0.000006
+        3    1       -6.040141       -6.040131        0.000009
+        3    2       -3.370498       -3.370496        0.000002
+        3    3       -3.370250       -3.370248        0.000002
+        3    4       -3.133433       -3.133438        0.000005
+        3    5       -2.884130       -2.884130        0.000000
+      324    1       -6.009506       -6.009504        0.000002
+      324    2       -3.358415       -3.358422        0.000007
+      324    3       -3.282784       -3.282784        0.000000
+      324    4       -3.093983       -3.093983        0.000000
+      324    5       -2.941126       -2.941127        0.000001
+
+     Max error:   2.6958E-05 eV
+     PASSED: Wannier interpolation < 1e-4 eV
+     ============================================================
+
+     Loading defect supercell potential...
+
+     Reading xml data from directory:
+
+     ../defect_super/dout/mos2_defect.save/
+
+     IMPORTANT: XC functional enforced from input :
+     Exchange-correlation= PBE
+                           (   1   4   3   4   0   0   0)
+     Any further DFT definition will be discarded
+     Please, verify this is what you really want
+
+ 
+     G-vector sticks info
+     --------------------
+     sticks:   dense  smooth     PW     G-vecs:    dense   smooth      PW
+     Sum       35929   35929   8995              6920665  6920665  865231
+ 
+     Using Slab Decomposition
+ 
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+  The code is running with the 2D cutoff
+  Please refer to:
+  Sohier, T., Calandra, M., & Mauri, F. (2017), 
+  Density functional perturbation theory for gated two-dimensional heterostructures:
+  Theoretical developments and application to flexural phonons in graphene.
+  Physical Review B, 96(7), 75448. https://doi.org/10.1103/PhysRevB.96.075448
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+       grid:    240   240   300  nat:   107
+     Loading pristine supercell potential...
+
+     Reading xml data from directory:
+
+     ../pristine_super/dout/mos2_pristine.save/
+
+     IMPORTANT: XC functional enforced from input :
+     Exchange-correlation= PBE
+                           (   1   4   3   4   0   0   0)
+     Any further DFT definition will be discarded
+     Please, verify this is what you really want
+
+ 
+     G-vector sticks info
+     --------------------
+     sticks:   dense  smooth     PW     G-vecs:    dense   smooth      PW
+     Sum       35929   35929   8995              6920665  6920665  865231
+ 
+     Using Slab Decomposition
+ 
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+  The code is running with the 2D cutoff
+  Please refer to:
+  Sohier, T., Calandra, M., & Mauri, F. (2017), 
+  Density functional perturbation theory for gated two-dimensional heterostructures:
+  Theoretical developments and application to flexural phonons in graphene.
+  Physical Review B, 96(7), 75448. https://doi.org/10.1103/PhysRevB.96.075448
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+       grid:    240   240   300  nat:   108
+     Restoring primitive cell state...
+
+     Reading xml data from directory:
+
+     ../primitive/dout/mos2.save/
+
+     IMPORTANT: XC functional enforced from input :
+     Exchange-correlation= PBE
+                           (   1   4   3   4   0   0   0)
+     Any further DFT definition will be discarded
+     Please, verify this is what you really want
+
+ 
+     G-vector sticks info
+     --------------------
+     sticks:   dense  smooth     PW     G-vecs:    dense   smooth      PW
+     Sum        1003    1003    361               192259   192259   41393
+ 
+     Using Slab Decomposition
+ 
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+  The code is running with the 2D cutoff
+  Please refer to:
+  Sohier, T., Calandra, M., & Mauri, F. (2017), 
+  Density functional perturbation theory for gated two-dimensional heterostructures:
+  Theoretical developments and application to flexural phonons in graphene.
+  Physical Review B, 96(7), 75448. https://doi.org/10.1103/PhysRevB.96.075448
+ ----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D----2D
+
+     ============================================================
+     Full double-FT: M(k, k') for all (k,k') pairs
+     ============================================================
+     Nk_i = Nk_f =    324
+     nks=   3  npool= 108
+     nrr (R_e = R_p)=   331
+     Cached    3 pool-local k-points in real space
+     kf pool    0 /  107  pairs:      9 /    972
+     kf pool    1 /  107  pairs:     18 /    972
+     kf pool    2 /  107  pairs:     27 /    972
+     kf pool    3 /  107  pairs:     36 /    972
+     kf pool    4 /  107  pairs:     45 /    972
+     kf pool    5 /  107  pairs:     54 /    972
+     kf pool    6 /  107  pairs:     63 /    972
+     kf pool    7 /  107  pairs:     72 /    972
+     kf pool    8 /  107  pairs:     81 /    972
+     kf pool    9 /  107  pairs:     90 /    972
+     kf pool   10 /  107  pairs:     99 /    972
+     kf pool   11 /  107  pairs:    108 /    972
+     kf pool   12 /  107  pairs:    117 /    972
+     kf pool   13 /  107  pairs:    126 /    972
+     kf pool   14 /  107  pairs:    135 /    972
+     kf pool   15 /  107  pairs:    144 /    972
+     kf pool   16 /  107  pairs:    153 /    972
+     kf pool   17 /  107  pairs:    162 /    972
+     kf pool   18 /  107  pairs:    171 /    972
+     kf pool   19 /  107  pairs:    180 /    972
+     kf pool   20 /  107  pairs:    189 /    972
+     kf pool   21 /  107  pairs:    198 /    972
+     kf pool   22 /  107  pairs:    207 /    972
+     kf pool   23 /  107  pairs:    216 /    972
+     kf pool   24 /  107  pairs:    225 /    972
+     kf pool   25 /  107  pairs:    234 /    972
+     kf pool   26 /  107  pairs:    243 /    972
+     kf pool   27 /  107  pairs:    252 /    972
+     kf pool   28 /  107  pairs:    261 /    972
+     kf pool   29 /  107  pairs:    270 /    972
+     kf pool   30 /  107  pairs:    279 /    972
+     kf pool   31 /  107  pairs:    288 /    972
+     kf pool   32 /  107  pairs:    297 /    972
+     kf pool   33 /  107  pairs:    306 /    972
+     kf pool   34 /  107  pairs:    315 /    972
+     kf pool   35 /  107  pairs:    324 /    972
+     kf pool   36 /  107  pairs:    333 /    972
+     kf pool   37 /  107  pairs:    342 /    972
+     kf pool   38 /  107  pairs:    351 /    972
+     kf pool   39 /  107  pairs:    360 /    972
+     kf pool   40 /  107  pairs:    369 /    972
+     kf pool   41 /  107  pairs:    378 /    972
+     kf pool   42 /  107  pairs:    387 /    972
+     kf pool   43 /  107  pairs:    396 /    972
+     kf pool   44 /  107  pairs:    405 /    972
+     kf pool   45 /  107  pairs:    414 /    972
+     kf pool   46 /  107  pairs:    423 /    972
+     kf pool   47 /  107  pairs:    432 /    972
+     kf pool   48 /  107  pairs:    441 /    972
+     kf pool   49 /  107  pairs:    450 /    972
+     kf pool   50 /  107  pairs:    459 /    972
+     kf pool   51 /  107  pairs:    468 /    972
+     kf pool   52 /  107  pairs:    477 /    972
+     kf pool   53 /  107  pairs:    486 /    972
+     kf pool   54 /  107  pairs:    495 /    972
+     kf pool   55 /  107  pairs:    504 /    972
+     kf pool   56 /  107  pairs:    513 /    972
+     kf pool   57 /  107  pairs:    522 /    972
+     kf pool   58 /  107  pairs:    531 /    972
+     kf pool   59 /  107  pairs:    540 /    972
+     kf pool   60 /  107  pairs:    549 /    972
+     kf pool   61 /  107  pairs:    558 /    972
+     kf pool   62 /  107  pairs:    567 /    972
+     kf pool   63 /  107  pairs:    576 /    972
+     kf pool   64 /  107  pairs:    585 /    972
+     kf pool   65 /  107  pairs:    594 /    972
+     kf pool   66 /  107  pairs:    603 /    972
+     kf pool   67 /  107  pairs:    612 /    972
+     kf pool   68 /  107  pairs:    621 /    972
+     kf pool   69 /  107  pairs:    630 /    972
+     kf pool   70 /  107  pairs:    639 /    972
+     kf pool   71 /  107  pairs:    648 /    972
+     kf pool   72 /  107  pairs:    657 /    972
+     kf pool   73 /  107  pairs:    666 /    972
+     kf pool   74 /  107  pairs:    675 /    972
+     kf pool   75 /  107  pairs:    684 /    972
+     kf pool   76 /  107  pairs:    693 /    972
+     kf pool   77 /  107  pairs:    702 /    972
+     kf pool   78 /  107  pairs:    711 /    972
+     kf pool   79 /  107  pairs:    720 /    972
+     kf pool   80 /  107  pairs:    729 /    972
+     kf pool   81 /  107  pairs:    738 /    972
+     kf pool   82 /  107  pairs:    747 /    972
+     kf pool   83 /  107  pairs:    756 /    972
+     kf pool   84 /  107  pairs:    765 /    972
+     kf pool   85 /  107  pairs:    774 /    972
+     kf pool   86 /  107  pairs:    783 /    972
+     kf pool   87 /  107  pairs:    792 /    972
+     kf pool   88 /  107  pairs:    801 /    972
+     kf pool   89 /  107  pairs:    810 /    972
+     kf pool   90 /  107  pairs:    819 /    972
+     kf pool   91 /  107  pairs:    828 /    972
+     kf pool   92 /  107  pairs:    837 /    972
+     kf pool   93 /  107  pairs:    846 /    972
+     kf pool   94 /  107  pairs:    855 /    972
+     kf pool   95 /  107  pairs:    864 /    972
+     kf pool   96 /  107  pairs:    873 /    972
+     kf pool   97 /  107  pairs:    882 /    972
+     kf pool   98 /  107  pairs:    891 /    972
+     kf pool   99 /  107  pairs:    900 /    972
+     kf pool  100 /  107  pairs:    909 /    972
+     kf pool  101 /  107  pairs:    918 /    972
+     kf pool  102 /  107  pairs:    927 /    972
+     kf pool  103 /  107  pairs:    936 /    972
+     kf pool  104 /  107  pairs:    945 /    972
+     kf pool  105 /  107  pairs:    954 /    972
+     kf pool  106 /  107  pairs:    963 /    972
+     kf pool  107 /  107  pairs:    972 /    972
+     All ki-kf pairs completed. Writing output...
+     Decay data written to mos2_decay_2d.dat
+     nrr_e=   331  nrr_p=   331
+     M(R_e,R_p) binary written to mos2_edmatw_2d.bin
+     ============================================================
+     M(R_e,R_p) binary read from mos2_edmatw_2d.bin
+       nbndsub=   5  nrr=   331
+
+     ============================================================
+     DOS validation: triangular vs Gaussian vs adaptive
+     Fixed Gaussian sigma:   0.0100 eV
+     ============================================================
+     Adaptive sigma range:     1.00 -     4.34 meV
+       ki:     9000 /    90000
+       ki:    18000 /    90000
+       ki:    27000 /    90000
+       ki:    36000 /    90000
+       ki:    45000 /    90000
+       ki:    54000 /    90000
+       ki:    63000 /    90000
+       ki:    72000 /    90000
+       ki:    81000 /    90000
+       ki:    90000 /    90000
+     DOS validation written to mos2_dos_validation.dat
+     ============================================================
+
+     ------------------------------------------------------------
+     Transport mode: skipping Part B file output
+       Computing scattering rates with Fermi filtering
+     ------------------------------------------------------------
+
+     ============================================================
+     Phase 4: Transport (SERTA/MRTA) with IBZ symmetry
+     ============================================================
+     Fine k-grid:  300 300   1  total:    90000
+     Energy window:    -4.2500 to    -4.1000 eV
+     Carrier conc:   1.000E+10 cm^-2
+     n_d per cell: 8.7861E-04
+     nsym =   12  npool =  108
+     Spin degeneracy (sfac): 2.0
+     Delta method: gaussian
+     IBZ k-points:    15151 /    90000
+     Symmetry speedup:    5.9x
+     Band energy ranges (eV):
+       Band  1:  min=   -6.8993  max=   -5.9365
+       Band  2:  min=   -4.2795  max=   -3.1843
+       Band  3:  min=   -3.6937  max=   -2.6975
+       Band  4:  min=   -3.4574  max=   -1.9936
+       Band  5:  min=   -3.0350  max=   -1.0941
+     Transport window: [   -4.2500,    -4.1000] eV
+     Active kf (full BZ):     2722 /    90000
+     Active ki (IBZ):          453 /    15151
+     Total (ki,kf) pairs:    1233066
+     Pairs per pool:       11417.3
+
+     T =    100.0 K  E_F =    -4.3005 eV
+       pairs:     2283 /    11418  (total:  1233066)
+       pairs:     4566 /    11418  (total:  1233066)
+       pairs:     6849 /    11418  (total:  1233066)
+       pairs:     9132 /    11418  (total:  1233066)
+       pairs:    11415 /    11418  (total:  1233066)
+       States with nonzero inv_tau:   2718
+       avg inv_tau: SERTA=  8.2075E-03  MRTA=  7.5142E-03
+       inv_tau range:   4.2131E-03 -   9.5883E-03
+       avg |v|^2 =   5.0243E-02 (Ry*bohr)^2
+       avg tau SERTA =   5.8946E+00 fs
+     T =    100.0 K  (   1233066 ki-kf pairs computed)
+       mu_SERTA_xx =   1.3210E+02 cm^2/Vs
+       mu_SERTA_yy =   1.3210E+02 cm^2/Vs
+       mu_MRTA_xx  =   1.3676E+02 cm^2/Vs
+       mu_MRTA_yy  =   1.3676E+02 cm^2/Vs
+
+     T =    200.0 K  E_F =    -4.3632 eV
+       pairs:     2283 /    11418  (total:  1233066)
+       pairs:     4566 /    11418  (total:  1233066)
+       pairs:     6849 /    11418  (total:  1233066)
+       pairs:     9132 /    11418  (total:  1233066)
+       pairs:    11415 /    11418  (total:  1233066)
+       States with nonzero inv_tau:   2718
+       avg inv_tau: SERTA=  8.2075E-03  MRTA=  7.5142E-03
+       inv_tau range:   4.2131E-03 -   9.5883E-03
+       avg |v|^2 =   5.0243E-02 (Ry*bohr)^2
+       avg tau SERTA =   5.8946E+00 fs
+     T =    200.0 K  (   1233066 ki-kf pairs computed)
+       mu_SERTA_xx =   6.7881E+01 cm^2/Vs
+       mu_SERTA_yy =   6.7881E+01 cm^2/Vs
+       mu_MRTA_xx  =   7.0848E+01 cm^2/Vs
+       mu_MRTA_yy  =   7.0848E+01 cm^2/Vs
+
+     T =    300.0 K  E_F =    -4.4305 eV
+       pairs:     2283 /    11418  (total:  1233066)
+       pairs:     4566 /    11418  (total:  1233066)
+       pairs:     6849 /    11418  (total:  1233066)
+       pairs:     9132 /    11418  (total:  1233066)
+       pairs:    11415 /    11418  (total:  1233066)
+       States with nonzero inv_tau:   2718
+       avg inv_tau: SERTA=  8.2075E-03  MRTA=  7.5142E-03
+       inv_tau range:   4.2131E-03 -   9.5883E-03
+       avg |v|^2 =   5.0243E-02 (Ry*bohr)^2
+       avg tau SERTA =   5.8946E+00 fs
+     T =    300.0 K  (   1233066 ki-kf pairs computed)
+       mu_SERTA_xx =   4.7943E+01 cm^2/Vs
+       mu_SERTA_yy =   4.7943E+01 cm^2/Vs
+       mu_MRTA_xx  =   5.0483E+01 cm^2/Vs
+       mu_MRTA_yy  =   5.0483E+01 cm^2/Vs
+
+     Mobility written to mos2_transport.dat
+     Scattering rates written to mos2_inv_tau.dat
+     ============================================================
+ 
+     EDI          :  17m16.72s CPU  17m26.45s WALL
+
+ 
+   This run was terminated on:  23: 9:20  26Mar2026            
+
+=------------------------------------------------------------------------------=
+   JOB DONE.
+=------------------------------------------------------------------------------=
