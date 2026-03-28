@@ -21,6 +21,12 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 - **Automated setup**: Python scripts generate all supercell and primitive cell inputs from a single `scf.in`
 - **On-the-fly potential extraction** directly from QE save files (no intermediate `pp.x` step)
 
+## Workflow
+<p align="center">
+  <img src="figs/workflow.png" alt="EDI workflow" width="600">
+</p>
+
+
 ## Prerequisites
 
 - [Quantum ESPRESSO 7.5](https://www.quantum-espresso.org/) compiled with [Wannier90](https://wannier.org/)
@@ -75,7 +81,7 @@ Stage 1: DFT (pw.x)              Stage 2: EDI (edi.x)
 Use `gen_supercell.py` to automatically generate all QE input files from a primitive cell `scf.in`:
 
 ```bash
-# S vacancy in a 4x4x1 MoS2 supercell
+# S vacancy in a 6x6x1 MoS2 supercell
 python script/gen_supercell.py \
     --input scf.in \
     --nx 6 --ny 6 --nz 1 \
@@ -249,8 +255,8 @@ Complete input for MoS2 S-vacancy transport calculation:
   coarse_nk1 = 18
   coarse_nk2 = 18
   coarse_nk3 = 1
-  fine_nk1 = 90
-  fine_nk2 = 90
+  fine_nk1 = 300
+  fine_nk2 = 300
   fine_nk3 = 1
 
   ! Transport
@@ -278,7 +284,7 @@ To reuse previously computed Wannier matrix elements (skip Part A):
   wannierize = .false.     ! reuse existing Wannier90 checkpoint
   nbndsub = 5
   coarse_nk1 = 18, coarse_nk2 = 18, coarse_nk3 = 1
-  fine_nk1 = 90, fine_nk2 = 90, fine_nk3 = 1
+  fine_nk1 = 300, fine_nk2 = 300, fine_nk3 = 1
   do_transport = .true.
   transport_win_min = -4.25, transport_win_max = -4.10
   carrier_conc = 1.0e10, defect_conc = 1.0e12
