@@ -23,7 +23,7 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 
 ## Workflow
 <p align="center">
-  <img src="figs/workflow.png" alt="EDI workflow" width="600">
+  <img src="figs/workflow.png" alt="EDI workflow" width="800">
 </p>
 
 
