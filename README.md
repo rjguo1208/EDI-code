@@ -69,7 +69,7 @@ A typical EDI calculation proceeds in four stages:
 ```
 Stage 1: DFT (pw.x)              Stage 2: EDI (edi.x)
   Primitive cell SCF                Wannierize bands
-  Primitive cell NSCF               Compute M(R_e, R_p) via double-FT
+  Primitive cell NSCF               Compute M(R, R') via double-FT
   Pristine supercell SCF            Interpolate M to fine k-grid
   Defect supercell SCF              Compute scattering rates & mobility
 ```
@@ -151,7 +151,7 @@ EDI produces:
 |------|-------------|
 | `prefix_transport.dat` | Mobility vs temperature (SERTA and MRTA, xx and yy components) |
 | `prefix_inv_tau.dat` | State-resolved inverse lifetimes 1/tau(n,k) and tau(n,k) |
-| `prefix_edmatw_2d.bin` | Wannier-basis matrix elements M(R_e, R_p), reusable with `edwread = .true.` |
+| `prefix_edmatw_2d.bin` | Wannier-basis matrix elements M(R, R'), reusable with `edwread = .true.` |
 
 ## Input Reference
 
