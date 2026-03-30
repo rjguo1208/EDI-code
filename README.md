@@ -135,10 +135,11 @@ cd ../defect_super
 mpirun -np 72 pw.x < scf.in > scf.out
 ```
 
-### Step 3: Run EDI
+### Step 3: Extract potentials and Run EDI
 
 ```bash
 cd edi
+srun -n 1 extract_pot.x -i extract_pot.in > extract_pot.out
 srun -n 72 edi.x -nk 72 -i edi.in > edi.out
 ```
 
