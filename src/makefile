@@ -53,5 +53,25 @@ edi.o: edi.f90
 $(EXE): $(OBJ) pw2wan_edi.o edi_pw2wan.o edi.o
 	$(LD) $(LDFLAGS) -o $(EXE) $(OBJ) pw2wan_edi.o edi_pw2wan.o edi.o $(MODULES) $(LIBOBJS) $(QELIBS)
 
+test_sum_rule.o: test_sum_rule.f90
+	$(MPIF90) $(F90FLAGS) -c test_sum_rule.f90 -o test_sum_rule.o
+
+test_potential.o: test_potential.f90
+	$(MPIF90) $(F90FLAGS) -c test_potential.f90 -o test_potential.o
+
+PWLIBS = ../../PW/src/libpw.a $(QEMODS) $(W90LIB)
+
+edi_test_sr.x: test_sum_rule.o
+	$(LD) $(LDFLAGS) -o edi_test_sr.x test_sum_rule.o $(PWLIBS) $(LIBOBJS) $(QELIBS)
+
+edi_test_pot.x: test_potential.o
+	$(LD) $(LDFLAGS) -o edi_test_pot.x test_potential.o $(PWLIBS) $(LIBOBJS) $(QELIBS)
+
+extract_pot.o: extract_pot.f90
+	$(MPIF90) $(F90FLAGS) -c extract_pot.f90 -o extract_pot.o
+
+extract_pot.x: extract_pot.o
+	$(LD) $(LDFLAGS) -o extract_pot.x extract_pot.o $(PWLIBS) $(LIBOBJS) $(QELIBS)
+
 clean:
-	rm -f *.o *~ *.d *.mod *.i $(EXE)
+	rm -f *.o *~ *.d *.mod *.i $(EXE) edi_test_sr.x

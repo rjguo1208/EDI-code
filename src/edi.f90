@@ -34,13 +34,17 @@ Program edi
                          transport_win_min, transport_win_max, &
                          carrier_conc, defect_conc, delta_method, delta_sigma, &
                          pristine_prefix, pristine_outdir, &
-                         defect_prefix, defect_outdir
+                         defect_prefix, defect_outdir, &
+                         potfile_d, potfile_p, &
+                         pot_align, defect_center, core_align_radius
   USE edi_pw2wan, ONLY : edi_run_wannier90, edi_interp_bands
   USE edi_read_hr, ONLY : read_hr_file
-  USE ed_coarse, ONLY : load_supercell_pot, read_filukk_edi, &
+  USE ed_coarse, ONLY : load_supercell_pot, load_pot_from_file, read_filukk_edi, &
                          ed_interp_from_file, ed_coarse_full_q, ed_fine_interp_2d, &
                          read_edmatw_2d_file, &
-                         ed_direct_from_files, generate_nscf_input
+                         ed_direct_from_files, generate_nscf_input, &
+                         build_vcolin_aligned, build_vcolin_corealign, &
+                         write_vcolin_cube
   USE edic_mod, ONLY : V_d, V_p, V_colin
 
   IMPLICIT NONE
@@ -51,7 +55,7 @@ Program edi
   INTEGER, ALLOCATABLE :: irvec(:,:), ndegen(:)
   COMPLEX(dp), ALLOCATABLE :: chw(:,:,:)
   REAL(dp), ALLOCATABLE :: eig_interp(:,:), xk_fine(:,:), et_kept(:,:)
-  REAL(dp) :: max_err, err
+  REAL(dp) :: max_err, err, vac_shift
   LOGICAL :: need_wf
   CHARACTER(LEN=256) :: outdir
 
@@ -116,6 +120,11 @@ Program edi
   CALL mp_bcast(defect_conc, ionode_id, world_comm)
   CALL mp_bcast(delta_method, ionode_id, world_comm)
   CALL mp_bcast(delta_sigma, ionode_id, world_comm)
+  CALL mp_bcast(potfile_d, ionode_id, world_comm)
+  CALL mp_bcast(potfile_p, ionode_id, world_comm)
+  CALL mp_bcast(pot_align, ionode_id, world_comm)
+  CALL mp_bcast(defect_center, ionode_id, world_comm)
+  CALL mp_bcast(core_align_radius, ionode_id, world_comm)
 
   prefix = TRIM(edi_prefix)
   tmp_dir = trimcheck(TRIM(edi_outdir))
@@ -163,14 +172,82 @@ Program edi
         ENDIF
      ENDIF
 
-     ! Load supercell potentials (same method as Part A)
-     IF (ionode) WRITE(stdout, '(5X,A)') 'Loading defect supercell potential...'
-     CALL load_supercell_pot(TRIM(defect_prefix), TRIM(defect_outdir), V_d)
-     IF (ionode) WRITE(stdout, '(5X,A)') 'Loading pristine supercell potential...'
-     CALL load_supercell_pot(TRIM(pristine_prefix), TRIM(pristine_outdir), V_p)
+     ! Load supercell potentials
+     IF (LEN_TRIM(potfile_d) > 0 .AND. LEN_TRIM(potfile_p) > 0) THEN
+        ! Use pre-extracted cube files (from extract_pot.x)
+        IF (ionode) WRITE(stdout, '(5X,A)') 'Loading potentials from cube files...'
+        CALL load_pot_from_file(TRIM(potfile_d), V_d)
+        CALL load_pot_from_file(TRIM(potfile_p), V_p)
+     ELSE
+        ! On-the-fly extraction (MPI_COMM_SELF on ionode)
+        IF (ionode) WRITE(stdout, '(5X,A)') 'Loading defect supercell potential...'
+        CALL load_supercell_pot(TRIM(defect_prefix), TRIM(defect_outdir), V_d)
+        IF (ionode) WRITE(stdout, '(5X,A)') 'Loading pristine supercell potential...'
+        CALL load_supercell_pot(TRIM(pristine_prefix), TRIM(pristine_outdir), V_p)
+     ENDIF
 
      ALLOCATE(V_colin(V_d%nr1 * V_d%nr2 * V_d%nr3))
-     V_colin(:) = V_d%pot(:) - V_p%pot(:)
+     SELECT CASE (TRIM(pot_align))
+     CASE ('vacuum')
+        CALL build_vcolin_aligned(V_d, V_p, V_colin, SIZE(V_colin), vac_shift)
+     CASE ('core')
+        CALL build_vcolin_corealign(V_d, V_p, V_colin, SIZE(V_colin), vac_shift, &
+                                     defect_center, core_align_radius)
+     CASE ('none')
+        V_colin(:) = V_d%pot(:) - V_p%pot(:)
+        vac_shift = 0.0_dp
+        IF (ionode) WRITE(stdout, '(5X,A)') 'pot_align = none: no alignment applied'
+     CASE DEFAULT
+        CALL errore('edi', 'Unknown pot_align: '//TRIM(pot_align), 1)
+     END SELECT
+     IF (ionode) THEN
+        WRITE(stdout, '(5X,A)') '--- V_colin DIAGNOSTIC ---'
+        WRITE(stdout, '(5X,A,2ES14.6)') 'V_d%pot  min/max = ', MINVAL(V_d%pot), MAXVAL(V_d%pot)
+        WRITE(stdout, '(5X,A,2ES14.6)') 'V_p%pot  min/max = ', MINVAL(V_p%pot), MAXVAL(V_p%pot)
+        WRITE(stdout, '(5X,A,2ES14.6)') 'V_d-V_p  min/max = ', &
+             MINVAL(V_d%pot - V_p%pot), MAXVAL(V_d%pot - V_p%pot)
+        WRITE(stdout, '(5X,A,2ES14.6)') 'V_colin  min/max = ', MINVAL(V_colin), MAXVAL(V_colin)
+        WRITE(stdout, '(5X,A,I12)') 'SIZE(V_d%pot) = ', SIZE(V_d%pot)
+        WRITE(stdout, '(5X,A,I12)') 'SIZE(V_colin) = ', SIZE(V_colin)
+        WRITE(stdout, '(5X,A)') '--------------------------'
+        ! Check grid ordering: sample specific (ix,iy,iz) points
+        ! Vacancy site should be near (120,120,170) in the 240x240x300 grid
+        ! Point in vacuum should be near (0,0,0)
+        BLOCK
+           INTEGER :: nr1_d, nr2_d, nr3_d, idx
+           nr1_d = V_d%nr1; nr2_d = V_d%nr2; nr3_d = V_d%nr3
+           ! Point at (0,0,0) — vacuum
+           idx = 0 + 0*nr1_d + 0*nr1_d*nr2_d + 1
+           WRITE(stdout, '(5X,A,I10,A,2F12.6)') 'idx=', idx, &
+                '  (0,0,0) V_d/V_p = ', V_d%pot(idx), V_p%pot(idx)
+           ! Point at (120,120,0) — vacuum xy-center
+           idx = 120 + 120*nr1_d + 0*nr1_d*nr2_d + 1
+           WRITE(stdout, '(5X,A,I10,A,2F12.6)') 'idx=', idx, &
+                '  (120,120,0) V_d/V_p = ', V_d%pot(idx), V_p%pot(idx)
+           ! Point at (120,120,170) — near vacancy
+           idx = 120 + 120*nr1_d + 170*nr1_d*nr2_d + 1
+           WRITE(stdout, '(5X,A,I10,A,2F12.6)') 'idx=', idx, &
+                '  (120,120,170) V_d/V_p = ', V_d%pot(idx), V_p%pot(idx)
+           ! Point at (0,0,170) — same z-plane, different xy
+           idx = 0 + 0*nr1_d + 170*nr1_d*nr2_d + 1
+           WRITE(stdout, '(5X,A,I10,A,2F12.6)') 'idx=', idx, &
+                '  (0,0,170) V_d/V_p = ', V_d%pot(idx), V_p%pot(idx)
+           ! Point at (120,120,150) — Mo layer
+           idx = 120 + 120*nr1_d + 150*nr1_d*nr2_d + 1
+           WRITE(stdout, '(5X,A,I10,A,2F12.6)') 'idx=', idx, &
+                '  (120,120,150) V_d/V_p = ', V_d%pot(idx), V_p%pot(idx)
+           ! Check where V_d-V_p is largest
+           idx = MAXLOC(V_d%pot - V_p%pot, DIM=1)
+           WRITE(stdout, '(5X,A,I10,A,3I6)') 'maxdiff at idx=', idx, &
+                '  (ix,iy,iz) = ', MOD(idx-1, nr1_d), MOD((idx-1)/nr1_d, nr2_d), &
+                (idx-1)/(nr1_d*nr2_d)
+           WRITE(stdout, '(5X,A,3F14.6)') '  V_d, V_p, diff = ', &
+                V_d%pot(idx), V_p%pot(idx), V_d%pot(idx) - V_p%pot(idx)
+        END BLOCK
+        WRITE(stdout, '(5X,A)') '--------------------------'
+        FLUSH(stdout)
+     ENDIF
+     CALL write_vcolin_cube(V_d, V_colin, SIZE(V_colin), TRIM(edi_prefix))
 
      ! Restore primitive cell state (same as Part A)
      IF (ionode) WRITE(stdout, '(5X,A)') 'Restoring primitive cell state...'
@@ -319,13 +396,32 @@ Program edi
         !=========================================================
         ! Part A: Load potentials and compute M(R_e, R_p)
         !=========================================================
-        IF (ionode) WRITE(stdout, '(5X,A)') 'Loading defect supercell potential...'
-        CALL load_supercell_pot(TRIM(defect_prefix), TRIM(defect_outdir), V_d)
-        IF (ionode) WRITE(stdout, '(5X,A)') 'Loading pristine supercell potential...'
-        CALL load_supercell_pot(TRIM(pristine_prefix), TRIM(pristine_outdir), V_p)
+        IF (LEN_TRIM(potfile_d) > 0 .AND. LEN_TRIM(potfile_p) > 0) THEN
+           IF (ionode) WRITE(stdout, '(5X,A)') 'Loading potentials from cube files...'
+           CALL load_pot_from_file(TRIM(potfile_d), V_d)
+           CALL load_pot_from_file(TRIM(potfile_p), V_p)
+        ELSE
+           IF (ionode) WRITE(stdout, '(5X,A)') 'Loading defect supercell potential...'
+           CALL load_supercell_pot(TRIM(defect_prefix), TRIM(defect_outdir), V_d)
+           IF (ionode) WRITE(stdout, '(5X,A)') 'Loading pristine supercell potential...'
+           CALL load_supercell_pot(TRIM(pristine_prefix), TRIM(pristine_outdir), V_p)
+        ENDIF
 
         ALLOCATE(V_colin(V_d%nr1 * V_d%nr2 * V_d%nr3))
-        V_colin(:) = V_d%pot(:) - V_p%pot(:)
+        SELECT CASE (TRIM(pot_align))
+        CASE ('vacuum')
+           CALL build_vcolin_aligned(V_d, V_p, V_colin, SIZE(V_colin), vac_shift)
+        CASE ('core')
+           CALL build_vcolin_corealign(V_d, V_p, V_colin, SIZE(V_colin), vac_shift, &
+                                        defect_center, core_align_radius)
+        CASE ('none')
+           V_colin(:) = V_d%pot(:) - V_p%pot(:)
+           vac_shift = 0.0_dp
+           IF (ionode) WRITE(stdout, '(5X,A)') 'pot_align = none: no alignment applied'
+        CASE DEFAULT
+           CALL errore('edi', 'Unknown pot_align: '//TRIM(pot_align), 1)
+        END SELECT
+        CALL write_vcolin_cube(V_d, V_colin, SIZE(V_colin), TRIM(edi_prefix))
 
         IF (ionode) WRITE(stdout, '(5X,A)') 'Restoring primitive cell state...'
         CALL clean_pw(.TRUE.)

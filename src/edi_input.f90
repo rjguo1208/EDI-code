@@ -75,6 +75,18 @@ MODULE edi_input
   CHARACTER(LEN=256) :: defect_prefix = ' '
   CHARACTER(LEN=256) :: defect_outdir = ' '
 
+  ! Pre-extracted potential cube files (from extract_pot.x)
+  ! If set, these are used instead of on-the-fly loading
+  CHARACTER(LEN=256) :: potfile_d = ' '
+  CHARACTER(LEN=256) :: potfile_p = ' '
+
+  ! Potential alignment: 'vacuum' (2D), 'core' (2D/3D), 'none'
+  CHARACTER(LEN=16) :: pot_align = 'vacuum'
+  ! Defect center in fractional coordinates of the supercell (required for 'core')
+  REAL(dp) :: defect_center(3) = (/ 0.0_dp, 0.0_dp, 0.0_dp /)
+  ! Averaging sphere radius in Bohr for core alignment
+  REAL(dp) :: core_align_radius = 2.0_dp
+
   NAMELIST / edinput / &
        wannierize, nbndsub, dis_win_min, dis_win_max, &
        dis_froz_min, dis_froz_max, num_iter, iprint_w90, &
@@ -88,6 +100,8 @@ MODULE edi_input
        fine_nk1, fine_nk2, fine_nk3, &
        do_edmat, pristine_prefix, pristine_outdir, &
        defect_prefix, defect_outdir, &
+       potfile_d, potfile_p, &
+       pot_align, defect_center, core_align_radius, &
        edwwrite, edwread, &
        edmat_direct_from_file, edmat_interp_from_file, &
        filki_direct, filkf_direct, filki_interp, filkf_interp, &
@@ -108,6 +122,8 @@ MODULE edi_input
        fine_nk1, fine_nk2, fine_nk3, &
        do_edmat, pristine_prefix, pristine_outdir, &
        defect_prefix, defect_outdir, &
+       potfile_d, potfile_p, &
+       pot_align, defect_center, core_align_radius, &
        edwwrite, edwread, &
        edmat_direct_from_file, edmat_interp_from_file, &
        filki_direct, filkf_direct, filki_interp, filkf_interp, &
@@ -167,6 +183,11 @@ CONTAINS
     CALL mp_bcast(pristine_outdir, 0, intra_image_comm)
     CALL mp_bcast(defect_prefix, 0, intra_image_comm)
     CALL mp_bcast(defect_outdir, 0, intra_image_comm)
+    CALL mp_bcast(pot_align, 0, intra_image_comm)
+    CALL mp_bcast(potfile_d, 0, intra_image_comm)
+    CALL mp_bcast(potfile_p, 0, intra_image_comm)
+    CALL mp_bcast(defect_center, 0, intra_image_comm)
+    CALL mp_bcast(core_align_radius, 0, intra_image_comm)
   END SUBROUTINE read_edinput
 
   SUBROUTINE sync_input_module()

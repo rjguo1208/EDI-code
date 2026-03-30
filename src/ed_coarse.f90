@@ -2,391 +2,19 @@ MODULE ed_coarse
   USE kinds, ONLY : dp
   IMPLICIT NONE
   PRIVATE
-  PUBLIC :: ed_coarse_calc, load_supercell_pot, read_filukk_edi
+  PUBLIC :: load_supercell_pot, load_pot_from_file, read_filukk_edi
   PUBLIC :: ed_fine_interp, ed_fine_interp_offdiag, read_edmatw_file
   PUBLIC :: read_edmatw_2d_file
   PUBLIC :: ed_interp_from_file
   PUBLIC :: ed_coarse_full_q
   PUBLIC :: ed_fine_interp_2d
   PUBLIC :: ed_direct_from_files, generate_nscf_input
+  PUBLIC :: build_vcolin_aligned, build_vcolin_corealign, write_vcolin_cube
 
 CONTAINS
 
-  SUBROUTINE ed_coarse_calc(nbndsub, nrr_k, irvec_k, ndegen_k, wslen_k, &
-                             edmatw, prefix_in)
-    !-----------------------------------------------------------------------
-    ! Part A: Compute electron-defect matrix elements on the coarse k-grid.
-    !
-    ! Potentials V_d, V_p, V_colin must be pre-loaded in edic_mod
-    ! before calling this routine. The primitive cell state (dffts, igk_k,
-    ! ngk, xk, nks) must be current (from read_file).
-    !
-    ! Workflow:
-    !   1. Allocate workspace (evc1, evc2, psic1, psic2 in edic_mod)
-    !   2. Loop k: read_collected_wfc, calcmdefect_ml_rs + calcmdefect_mnl_ks
-    !   3. Bloch -> Wannier via edbloch2wane
-    !   4. Write edmatw and decay.M
-    !-----------------------------------------------------------------------
-    USE io_global, ONLY : ionode, ionode_id, stdout
-    USE mp, ONLY : mp_bcast, mp_sum
-    USE mp_world, ONLY : world_comm
-    USE mp_global, ONLY : inter_pool_comm
-    USE cell_base, ONLY : at, bg, alat
-    USE klist, ONLY : xk, igk_k, ngk, nkstot, nks
-    USE wvfct, ONLY : npwx, nbnd
-    USE noncollin_module, ONLY : npol
-    USE fft_base, ONLY : dffts
-    USE io_files, ONLY : restart_dir
-    USE pw_restart_new, ONLY : read_collected_wfc
-    USE wann_common, ONLY : u_mat, u_mat_opt, n_wannier, &
-                             num_bands, excluded_band
-    USE ep_constants, ONLY : czero, cone, zero, twopi, ci, bohr2ang
-    USE edbloch2wan, ONLY : edbloch2wane
-    USE edic_mod, ONLY : V_d, V_p, V_colin, &
-                          evc1, evc2, psic1, psic2
-    IMPLICIT NONE
-
-    INTEGER, INTENT(IN) :: nbndsub, nrr_k
-    INTEGER, INTENT(IN) :: irvec_k(3, nrr_k), ndegen_k(nrr_k)
-    REAL(dp), INTENT(IN) :: wslen_k(nrr_k)
-    COMPLEX(dp), INTENT(OUT) :: edmatw(nbndsub, nbndsub, nrr_k)
-    CHARACTER(LEN=*), INTENT(IN) :: prefix_in
-
-    INTEGER :: ik, ibnd, jbnd, ib_i, ib_j
-    INTEGER :: nbnd_kept
-    COMPLEX(dp) :: mlocal, mnonlocal0, mnonlocal1
-    COMPLEX(dp), ALLOCATABLE :: edmatkq(:,:,:), cu(:,:,:)
-    REAL(dp), ALLOCATABLE :: xk_loc(:,:)
-
-    IF (ionode) THEN
-       WRITE(stdout, '(/,5X,A)') REPEAT('=', 60)
-       WRITE(stdout, '(5X,A)')   'Part A: Computing e-d matrix on coarse grid'
-       WRITE(stdout, '(5X,A)')   REPEAT('=', 60)
-       WRITE(stdout, '(5X,A,3I6)') 'Supercell FFT grid: ', &
-            V_d%nr1, V_d%nr2, V_d%nr3
-       WRITE(stdout, '(5X,A,I6)') 'Supercell nat (defect): ', V_d%nat
-       WRITE(stdout, '(5X,A,I6)') 'Primitive nkstot = ', nkstot
-       WRITE(stdout, '(5X,A,I6)') 'Primitive nks    = ', nks
-    ENDIF
-
-    nbnd_kept = 0
-    DO ibnd = 1, nbnd
-       IF (.NOT. excluded_band(ibnd)) nbnd_kept = nbnd_kept + 1
-    ENDDO
-
-    ! Allocate edic_mod workspace (used by calcmdefect_ml_rs/mnl_ks)
-    ALLOCATE(evc1(npwx * npol, nbnd))
-    ALLOCATE(evc2(npwx * npol, nbnd))
-    ALLOCATE(psic1(dffts%nnr))
-    ALLOCATE(psic2(dffts%nnr))
-
-    ALLOCATE(edmatkq(nbnd_kept, nbnd_kept, nks))
-    ALLOCATE(cu(nbnd_kept, nbndsub, nks))
-    ALLOCATE(xk_loc(3, nks))
-    xk_loc(:, 1:nks) = xk(:, 1:nks)
-
-    ! Build combined rotation matrix: cu = U_opt * U_dis
-    DO ik = 1, nks
-       IF (num_bands > n_wannier) THEN
-          cu(:,:,ik) = MATMUL(u_mat_opt(:,:,ik), u_mat(:,:,ik))
-       ELSE
-          cu(:,:,ik) = u_mat(:,:,ik)
-       ENDIF
-    ENDDO
-
-    edmatkq = czero
-
-    IF (ionode) THEN
-       WRITE(stdout, '(5X,A,I6,A)') &
-            'Computing M for ', nks, ' local k-points...'
-       WRITE(stdout, '(5X,A,I4,A,I4,A)') &
-            '  (', nbnd_kept, ' x ', nbnd_kept, ' band pairs per k-point)'
-       FLUSH(stdout)
-    ENDIF
-
-    CALL compute_edmatkq_fast(nbnd, nbnd_kept, nks, edmatkq)
-
-    !===========================================================
-    ! Bloch -> Wannier transform
-    !===========================================================
-    IF (ionode) THEN
-       WRITE(stdout, '(5X,A)') 'Rotating M to Wannier gauge and FT to real space...'
-       FLUSH(stdout)
-    ENDIF
-
-    CALL edbloch2wane(nbnd_kept, nbndsub, nks, nkstot, xk_loc, cu, cu, &
-                       edmatkq, nrr_k, irvec_k, wslen_k, edmatw)
-
-    IF (ionode) THEN
-       WRITE(stdout, '(5X,A)') 'Writing edmatw to file...'
-       CALL write_edmatw(nbndsub, nrr_k, irvec_k, ndegen_k, edmatw, prefix_in)
-       WRITE(stdout, '(5X,A)') REPEAT('=', 60)
-    ENDIF
-
-    DEALLOCATE(edmatkq, cu, xk_loc)
-    DEALLOCATE(evc1, evc2, psic1, psic2)
-
-  END SUBROUTINE ed_coarse_calc
-
-  SUBROUTINE compute_edmatkq_fast(nbnd, nbnd_kept, nks, edmatkq)
-    !-----------------------------------------------------------------------
-    ! Optimized matrix element computation for coarse grid (k = k').
-    !
-    ! Key optimizations:
-    !   1. Fold supercell potential onto primitive cell grid ONCE
-    !      (17.3M → 80K points, ~200× fewer per band pair)
-    !   2. FFT each band to real space ONCE per k-point
-    !   3. Local M = dot product over primitive grid (not supercell loop)
-    !   4. Nonlocal: compute beta projectors ONCE per k-point
-    !-----------------------------------------------------------------------
-    USE kinds, ONLY : dp
-    USE io_global, ONLY : ionode, ionode_id, stdout
-    USE wvfct, ONLY : npwx
-    USE noncollin_module, ONLY : npol, noncolin, lspinorb
-    USE klist, ONLY : xk, igk_k, ngk
-    USE fft_base, ONLY : dffts
-    USE fft_interfaces, ONLY : invfft
-    USE io_files, ONLY : restart_dir
-    USE pw_restart_new, ONLY : read_collected_wfc
-    USE wann_common, ONLY : excluded_band
-    USE uspp_param, ONLY : nh
-    USE uspp, ONLY : dvan, dvan_so
-    USE becmod, ONLY : bec_type, calbec, allocate_bec_type, deallocate_bec_type
-    USE edic_mod, ONLY : V_file, V_d, V_p, V_colin, evc1, evc2
-    USE ep_constants, ONLY : czero
-    IMPLICIT NONE
-
-    INTEGER, INTENT(IN) :: nbnd, nbnd_kept, nks
-    COMPLEX(dp), INTENT(OUT) :: edmatkq(nbnd_kept, nbnd_kept, nks)
-
-    INTEGER :: ik, ibnd, ib_i, ib_j, ig, irx, iry, irz, ir, ipol
-    INTEGER :: ir1mod, ir2mod, ir3mod, inr, irnmod
-    INTEGER :: na, nt, ih, jh, ikb, jkb, ijkb0, nkb_d, nkb_p
-    COMPLEX(dp) :: mlocal, mnl_d, mnl_p
-    COMPLEX(dp), ALLOCATABLE :: psir(:,:,:)  ! (nnr, npol, nbnd_kept)
-    COMPLEX(dp), ALLOCATABLE :: psic_tmp(:)
-    COMPLEX(dp), ALLOCATABLE :: vkb_d(:,:), vkb_p(:,:)
-    REAL(dp), ALLOCATABLE :: V_folded(:)
-    TYPE(bec_type) :: becp_d, becp_p
-    INTEGER, ALLOCATABLE :: band_map(:)
-
-    ! Build band mapping
-    ALLOCATE(band_map(nbnd_kept))
-    ib_i = 0
-    DO ibnd = 1, nbnd
-       IF (excluded_band(ibnd)) CYCLE
-       ib_i = ib_i + 1
-       band_map(ib_i) = ibnd
-    ENDDO
-
-    ! ============================================================
-    ! FOLD supercell potential onto primitive cell grid (done ONCE)
-    ! V_folded(r_prim) = sum_{R_super -> r_prim} V_colin(R_super)
-    ! ============================================================
-    ALLOCATE(V_folded(dffts%nnr))
-    V_folded(:) = 0.0_dp
-    inr = 0
-    DO irz = 0, V_d%nr3 - 1
-       ir3mod = irz - (irz / dffts%nr3) * dffts%nr3
-       DO iry = 0, V_d%nr2 - 1
-          ir2mod = iry - (iry / dffts%nr2) * dffts%nr2
-          DO irx = 0, V_d%nr1 - 1
-             ir1mod = irx - (irx / dffts%nr1) * dffts%nr1
-             inr = inr + 1
-             irnmod = ir3mod * dffts%nr1 * dffts%nr2 + ir2mod * dffts%nr1 + ir1mod + 1
-             V_folded(irnmod) = V_folded(irnmod) + V_colin(inr)
-          ENDDO
-       ENDDO
-    ENDDO
-
-    IF (ionode) THEN
-       WRITE(stdout, '(5X,A,I8,A,I8)') &
-            'V_folded: supercell grid=', V_d%nr1*V_d%nr2*V_d%nr3, &
-            ' -> primitive grid=', dffts%nnr
-       FLUSH(stdout)
-    ENDIF
-
-    ! Count nonlocal projectors for defect and pristine supercells
-    nkb_d = 0
-    DO nt = 1, V_d%ntyp
-       DO na = 1, V_d%nat
-          IF (V_d%ityp(na) == nt) nkb_d = nkb_d + nh(nt)
-       ENDDO
-    ENDDO
-    nkb_p = 0
-    DO nt = 1, V_p%ntyp
-       DO na = 1, V_p%nat
-          IF (V_p%ityp(na) == nt) nkb_p = nkb_p + nh(nt)
-       ENDDO
-    ENDDO
-
-    ALLOCATE(psir(dffts%nnr, npol, nbnd_kept))
-    ALLOCATE(psic_tmp(dffts%nnr))
-    ALLOCATE(vkb_d(npwx, nkb_d))
-    ALLOCATE(vkb_p(npwx, nkb_p))
-
-    DO ik = 1, nks
-       ! Read wavefunctions
-       CALL read_collected_wfc(restart_dir(), ik, evc1)
-       evc2(:,:) = evc1(:,:)
-
-       ! FFT all kept bands to real space ONCE
-       ! For SOC (npol=2): FFT both spinor components separately
-       DO ib_i = 1, nbnd_kept
-          ibnd = band_map(ib_i)
-          DO ipol = 1, npol
-             psic_tmp(:) = (0.0_dp, 0.0_dp)
-             DO ig = 1, ngk(ik)
-                psic_tmp(dffts%nl(igk_k(ig, ik))) = evc1(ig + (ipol-1)*npwx, ibnd)
-             ENDDO
-             CALL invfft('Wave', psic_tmp, dffts)
-             psir(:, ipol, ib_i) = psic_tmp(:)
-          ENDDO
-       ENDDO
-
-       ! Compute beta projectors ONCE per k-point
-       CALL get_betavkb(ngk(ik), igk_k(1,ik), xk(1,ik), &
-                         vkb_d, V_d%nat, V_d%ityp, V_d%tau, nkb_d)
-       CALL allocate_bec_type(nkb_d, nbnd, becp_d)
-       CALL calbec(ngk(ik), vkb_d, evc1, becp_d)
-
-       CALL get_betavkb(ngk(ik), igk_k(1,ik), xk(1,ik), &
-                         vkb_p, V_p%nat, V_p%ityp, V_p%tau, nkb_p)
-       CALL allocate_bec_type(nkb_p, nbnd, becp_p)
-       CALL calbec(ngk(ik), vkb_p, evc1, becp_p)
-
-       ! Compute matrix elements using folded potential + pre-computed bec
-       DO ib_i = 1, nbnd_kept
-          DO ib_j = 1, nbnd_kept
-             ! LOCAL: sum over spinor components
-             ! M_local = Σ_σ Σ_r ψ*_{σ}(r) ΔV(r) ψ'_{σ}(r)
-             mlocal = czero
-             DO ipol = 1, npol
-                DO ir = 1, dffts%nnr
-                   mlocal = mlocal + CONJG(psir(ir, ipol, ib_i)) * &
-                        psir(ir, ipol, ib_j) * V_folded(ir)
-                ENDDO
-             ENDDO
-             mlocal = mlocal / DBLE(dffts%nnr)
-
-             ! NONLOCAL defect: use pre-computed becp_d
-             mnl_d = czero
-             ijkb0 = 0
-             DO nt = 1, V_d%ntyp
-                DO na = 1, V_d%nat
-                   IF (V_d%ityp(na) == nt) THEN
-                      IF (lspinorb) THEN
-                         ! SOC: 4 spin channels using dvan_so and becp%nc
-                         DO ih = 1, nh(nt)
-                            ikb = ijkb0 + ih
-                            mnl_d = mnl_d + &
-                                 CONJG(becp_d%nc(ikb,1,band_map(ib_i))) * becp_d%nc(ikb,1,band_map(ib_j)) * dvan_so(ih,ih,1,nt) + &
-                                 CONJG(becp_d%nc(ikb,1,band_map(ib_i))) * becp_d%nc(ikb,2,band_map(ib_j)) * dvan_so(ih,ih,2,nt) + &
-                                 CONJG(becp_d%nc(ikb,2,band_map(ib_i))) * becp_d%nc(ikb,1,band_map(ib_j)) * dvan_so(ih,ih,3,nt) + &
-                                 CONJG(becp_d%nc(ikb,2,band_map(ib_i))) * becp_d%nc(ikb,2,band_map(ib_j)) * dvan_so(ih,ih,4,nt)
-                            DO jh = ih + 1, nh(nt)
-                               jkb = ijkb0 + jh
-                               mnl_d = mnl_d + &
-                                    CONJG(becp_d%nc(ikb,1,band_map(ib_i))) * becp_d%nc(jkb,1,band_map(ib_j)) * dvan_so(ih,jh,1,nt) + &
-                                    CONJG(becp_d%nc(jkb,1,band_map(ib_i))) * becp_d%nc(ikb,1,band_map(ib_j)) * dvan_so(jh,ih,1,nt) + &
-                                    CONJG(becp_d%nc(ikb,1,band_map(ib_i))) * becp_d%nc(jkb,2,band_map(ib_j)) * dvan_so(ih,jh,2,nt) + &
-                                    CONJG(becp_d%nc(jkb,1,band_map(ib_i))) * becp_d%nc(ikb,2,band_map(ib_j)) * dvan_so(jh,ih,2,nt) + &
-                                    CONJG(becp_d%nc(ikb,2,band_map(ib_i))) * becp_d%nc(jkb,1,band_map(ib_j)) * dvan_so(ih,jh,3,nt) + &
-                                    CONJG(becp_d%nc(jkb,2,band_map(ib_i))) * becp_d%nc(ikb,1,band_map(ib_j)) * dvan_so(jh,ih,3,nt) + &
-                                    CONJG(becp_d%nc(ikb,2,band_map(ib_i))) * becp_d%nc(jkb,2,band_map(ib_j)) * dvan_so(ih,jh,4,nt) + &
-                                    CONJG(becp_d%nc(jkb,2,band_map(ib_i))) * becp_d%nc(ikb,2,band_map(ib_j)) * dvan_so(jh,ih,4,nt)
-                            ENDDO
-                         ENDDO
-                      ELSE
-                         ! Scalar-relativistic: becp%k and dvan
-                         DO ih = 1, nh(nt)
-                            ikb = ijkb0 + ih
-                            mnl_d = mnl_d + CONJG(becp_d%k(ikb, band_map(ib_i))) * &
-                                 becp_d%k(ikb, band_map(ib_j)) * dvan(ih, ih, nt)
-                            DO jh = ih + 1, nh(nt)
-                               jkb = ijkb0 + jh
-                               mnl_d = mnl_d + &
-                                    (CONJG(becp_d%k(ikb, band_map(ib_i))) * becp_d%k(jkb, band_map(ib_j)) + &
-                                     CONJG(becp_d%k(jkb, band_map(ib_i))) * becp_d%k(ikb, band_map(ib_j))) * &
-                                    dvan(ih, jh, nt)
-                            ENDDO
-                         ENDDO
-                      ENDIF
-                      ijkb0 = ijkb0 + nh(nt)
-                   ENDIF
-                ENDDO
-             ENDDO
-
-             ! NONLOCAL pristine: use pre-computed becp_p
-             mnl_p = czero
-             ijkb0 = 0
-             DO nt = 1, V_p%ntyp
-                DO na = 1, V_p%nat
-                   IF (V_p%ityp(na) == nt) THEN
-                      IF (lspinorb) THEN
-                         ! SOC: 4 spin channels using dvan_so and becp%nc
-                         DO ih = 1, nh(nt)
-                            ikb = ijkb0 + ih
-                            mnl_p = mnl_p + &
-                                 CONJG(becp_p%nc(ikb,1,band_map(ib_i))) * becp_p%nc(ikb,1,band_map(ib_j)) * dvan_so(ih,ih,1,nt) + &
-                                 CONJG(becp_p%nc(ikb,1,band_map(ib_i))) * becp_p%nc(ikb,2,band_map(ib_j)) * dvan_so(ih,ih,2,nt) + &
-                                 CONJG(becp_p%nc(ikb,2,band_map(ib_i))) * becp_p%nc(ikb,1,band_map(ib_j)) * dvan_so(ih,ih,3,nt) + &
-                                 CONJG(becp_p%nc(ikb,2,band_map(ib_i))) * becp_p%nc(ikb,2,band_map(ib_j)) * dvan_so(ih,ih,4,nt)
-                            DO jh = ih + 1, nh(nt)
-                               jkb = ijkb0 + jh
-                               mnl_p = mnl_p + &
-                                    CONJG(becp_p%nc(ikb,1,band_map(ib_i))) * becp_p%nc(jkb,1,band_map(ib_j)) * dvan_so(ih,jh,1,nt) + &
-                                    CONJG(becp_p%nc(jkb,1,band_map(ib_i))) * becp_p%nc(ikb,1,band_map(ib_j)) * dvan_so(jh,ih,1,nt) + &
-                                    CONJG(becp_p%nc(ikb,1,band_map(ib_i))) * becp_p%nc(jkb,2,band_map(ib_j)) * dvan_so(ih,jh,2,nt) + &
-                                    CONJG(becp_p%nc(jkb,1,band_map(ib_i))) * becp_p%nc(ikb,2,band_map(ib_j)) * dvan_so(jh,ih,2,nt) + &
-                                    CONJG(becp_p%nc(ikb,2,band_map(ib_i))) * becp_p%nc(jkb,1,band_map(ib_j)) * dvan_so(ih,jh,3,nt) + &
-                                    CONJG(becp_p%nc(jkb,2,band_map(ib_i))) * becp_p%nc(ikb,1,band_map(ib_j)) * dvan_so(jh,ih,3,nt) + &
-                                    CONJG(becp_p%nc(ikb,2,band_map(ib_i))) * becp_p%nc(jkb,2,band_map(ib_j)) * dvan_so(ih,jh,4,nt) + &
-                                    CONJG(becp_p%nc(jkb,2,band_map(ib_i))) * becp_p%nc(ikb,2,band_map(ib_j)) * dvan_so(jh,ih,4,nt)
-                            ENDDO
-                         ENDDO
-                      ELSE
-                         ! Scalar-relativistic: becp%k and dvan
-                         DO ih = 1, nh(nt)
-                            ikb = ijkb0 + ih
-                            mnl_p = mnl_p + CONJG(becp_p%k(ikb, band_map(ib_i))) * &
-                                 becp_p%k(ikb, band_map(ib_j)) * dvan(ih, ih, nt)
-                            DO jh = ih + 1, nh(nt)
-                               jkb = ijkb0 + jh
-                               mnl_p = mnl_p + &
-                                    (CONJG(becp_p%k(ikb, band_map(ib_i))) * becp_p%k(jkb, band_map(ib_j)) + &
-                                     CONJG(becp_p%k(jkb, band_map(ib_i))) * becp_p%k(ikb, band_map(ib_j))) * &
-                                    dvan(ih, jh, nt)
-                            ENDDO
-                         ENDDO
-                      ENDIF
-                      ijkb0 = ijkb0 + nh(nt)
-                   ENDIF
-                ENDDO
-             ENDDO
-
-             edmatkq(ib_i, ib_j, ik) = mlocal + mnl_d - mnl_p
-          ENDDO
-       ENDDO
-
-       CALL deallocate_bec_type(becp_d)
-       CALL deallocate_bec_type(becp_p)
-
-       IF (ionode) THEN
-          WRITE(stdout, '(5X,A,I6,A,I6,A,I6,A)') &
-               '  k-point ', ik, ' / ', nks, ' done (', &
-               nbnd_kept*nbnd_kept, ' matrix elements)'
-          WRITE(stdout, '(5X,A,2ES14.6,A,2ES14.6)') &
-               '    M(1,1)=', REAL(edmatkq(1,1,ik)), AIMAG(edmatkq(1,1,ik)), &
-               '  M(1,2)=', REAL(edmatkq(1,MIN(2,nbnd_kept),ik)), &
-               AIMAG(edmatkq(1,MIN(2,nbnd_kept),ik))
-          FLUSH(stdout)
-       ENDIF
-    ENDDO
-
-    DEALLOCATE(psir, psic_tmp, V_folded, vkb_d, vkb_p, band_map)
-
-  END SUBROUTINE compute_edmatkq_fast
+  ! [ed_coarse_calc and compute_edmatkq_fast removed — dead code,
+  !  all matrix elements now go through ed_coarse_full_q (double-FT)]
 
   SUBROUTINE ed_fine_interp(nbndsub, nrr, irvec, ndegen, chw, edmatw, &
                              nk1f, nk2f, nk3f, prefix_in)
@@ -647,13 +275,16 @@ CONTAINS
     USE cell_base, ONLY : at
     USE klist, ONLY : xk, igk_k, ngk, nkstot, nks
     USE wvfct, ONLY : npwx, nbnd
-    USE noncollin_module, ONLY : npol
+    USE noncollin_module, ONLY : npol, lspinorb
     USE fft_base, ONLY : dffts
     USE fft_interfaces, ONLY : invfft
     USE io_files, ONLY : restart_dir
     USE pw_restart_new, ONLY : read_collected_wfc
     USE wann_common, ONLY : u_mat, n_wannier, num_bands, excluded_band
     USE edic_mod, ONLY : V_d, V_p, V_colin
+    USE uspp_param, ONLY : nh
+    USE uspp, ONLY : dvan, dvan_so
+    USE becmod, ONLY : bec_type, calbec, allocate_bec_type, deallocate_bec_type
     USE ep_constants, ONLY : czero, cone
     USE constants, ONLY : tpi
     USE parallelism, ONLY : fkbounds
@@ -671,13 +302,19 @@ CONTAINS
     INTEGER :: ibnd, nbnd_kept, lower_bnd, upper_bnd
     INTEGER :: ikf_p, ikf_l, ierr_mpi
     INTEGER :: my_rank, num_ranks, nkf, nrr_p
+    INTEGER :: na, nt, ih, jh, ikb, jkb, ijkb0, nkb_d, nkb_p
     REAL(dp) :: xkf_cryst(3), rdotk, rdotkf, arg, d1, d2, d3
     REAL(dp), ALLOCATABLE :: xk_cryst_loc(:,:), xk_cryst_all(:,:)
-    COMPLEX(dp) :: mlocal, phase
+    COMPLEX(dp) :: mlocal, mnl_d, mnl_p, phase
     COMPLEX(dp), ALLOCATABLE :: V_folded_kf(:)
     COMPLEX(dp), ALLOCATABLE :: psir_k(:,:,:), psir_kq(:,:,:), psic_tmp(:)
     COMPLEX(dp), ALLOCATABLE :: evc_tmp(:,:)
-    COMPLEX(dp), ALLOCATABLE :: edmatkq(:,:), edms(:,:), eptmp(:,:)
+    COMPLEX(dp), ALLOCATABLE :: edmatkq(:,:), edmatkq_loc(:,:), edmatkq_nl(:,:)
+    COMPLEX(dp), ALLOCATABLE :: edms(:,:), eptmp(:,:)
+    COMPLEX(dp), ALLOCATABLE :: edmat_bloch(:,:,:,:)
+    COMPLEX(dp), ALLOCATABLE :: edmat_bloch_loc(:,:,:,:)
+    COMPLEX(dp), ALLOCATABLE :: edmat_bloch_nl(:,:,:,:)
+    COMPLEX(dp), ALLOCATABLE :: vkb_d(:,:), vkb_p(:,:)
     COMPLEX(dp), ALLOCATABLE :: cu_k(:,:), cu_kq(:,:)
     COMPLEX(dp), ALLOCATABLE :: cu_all(:,:,:)
     INTEGER, ALLOCATABLE :: band_map(:)
@@ -731,19 +368,50 @@ CONTAINS
     ALLOCATE(evc_tmp(npwx * npol, nbnd))
     ALLOCATE(V_folded_kf(dffts%nnr))
     ALLOCATE(edmatkq(nbnd_kept, nbnd_kept))
+    ALLOCATE(edmatkq_loc(nbnd_kept, nbnd_kept))
+    ALLOCATE(edmatkq_nl(nbnd_kept, nbnd_kept))
     ALLOCATE(cu_k(nbnd_kept, nbndsub), cu_kq(nbnd_kept, nbndsub))
     ALLOCATE(edms(nbndsub, nbndsub), eptmp(nbnd_kept, nbndsub))
     ALLOCATE(edmatw_2d(nbndsub, nbndsub, nrr_k, nrr_p))
     edmatw_2d = czero
+    ! Bloch-basis storage for output (before Wannier rotation)
+    ALLOCATE(edmat_bloch(nbnd_kept, nbnd_kept, nkstot, nkstot))
+    ALLOCATE(edmat_bloch_loc(nbnd_kept, nbnd_kept, nkstot, nkstot))
+    ALLOCATE(edmat_bloch_nl(nbnd_kept, nbnd_kept, nkstot, nkstot))
+    edmat_bloch = czero
+    edmat_bloch_loc = czero
+    edmat_bloch_nl = czero
+
+    ! Count nonlocal projectors for defect and pristine supercells
+    nkb_d = 0
+    DO nt = 1, V_d%ntyp
+       DO na = 1, V_d%nat
+          IF (V_d%ityp(na) == nt) nkb_d = nkb_d + nh(nt)
+       ENDDO
+    ENDDO
+    nkb_p = 0
+    DO nt = 1, V_p%ntyp
+       DO na = 1, V_p%nat
+          IF (V_p%ityp(na) == nt) nkb_p = nkb_p + nh(nt)
+       ENDDO
+    ENDDO
+    ALLOCATE(vkb_d(npwx, nkb_d))
+    ALLOCATE(vkb_p(npwx, nkb_p))
 
     ! Panel broadcast: cache local psi(k), compute V_folded on-the-fly per (ki,kf)
     BLOCK
        COMPLEX(dp), ALLOCATABLE :: psir_cache(:,:,:,:), psir_recv(:,:,:,:)
+       ! Cached becp arrays: becp_d_cache(nkb_d, npol_or_1, nbnd, nks) etc.
+       ! For scalar-rel: becp%k(nkb, nbnd) — store as (nkb, 1, nbnd, nks)
+       ! For SOC:        becp%nc(nkb, npol, nbnd) — store as (nkb, npol, nbnd, nks)
+       COMPLEX(dp), ALLOCATABLE :: becd_cache(:,:,:,:), becd_recv(:,:,:,:)
+       COMPLEX(dp), ALLOCATABLE :: becp_cache(:,:,:,:), becpr_recv(:,:,:,:)
        COMPLEX(dp), ALLOCATABLE :: phase_ki(:), phase_kf(:)
        INTEGER :: ik_cache, ib_cache, ig_cache, ik_global, ipol_cache
        INTEGER :: ip, src_lower, src_nks, nkbase, nkrest, nks_max
        INTEGER :: ikf_local, ikf_global, npairs_done
        REAL(dp) :: qcryst(3), xki_cryst(3)
+       TYPE(bec_type) :: becp_tmp_d, becp_tmp_p
 
        ! Maximum k-points per pool (for receive buffer sizing)
        nkbase = nkstot / npool
@@ -751,11 +419,17 @@ CONTAINS
        nks_max = nkbase
        IF (nkrest > 0) nks_max = nkbase + 1
 
-       ! Step 1: Cache pool-local wavefunctions in real space
+       ! Step 1: Cache pool-local wavefunctions in real space + beta projections
        ! For SOC (npol=2): cache both spinor components
        ALLOCATE(psir_cache(dffts%nnr, npol, nbnd_kept, nks))
+       ALLOCATE(becd_cache(nkb_d, npol, nbnd, nks))
+       ALLOCATE(becp_cache(nkb_p, npol, nbnd, nks))
+       becd_cache = czero
+       becp_cache = czero
+
        DO ik_cache = 1, nks
           CALL read_collected_wfc(restart_dir(), ik_cache, evc_tmp)
+          ! FFT to real space
           DO ib_cache = 1, nbnd_kept
              DO ipol_cache = 1, npol
                 psic_tmp = (0.0_dp, 0.0_dp)
@@ -767,11 +441,33 @@ CONTAINS
                 psir_cache(:, ipol_cache, ib_cache, ik_cache) = psic_tmp
              ENDDO
           ENDDO
+          ! Compute and cache beta projections for nonlocal part
+          CALL get_betavkb(ngk(ik_cache), igk_k(1,ik_cache), xk(1,ik_cache), &
+                            vkb_d, V_d%nat, V_d%ityp, V_d%tau, nkb_d)
+          CALL allocate_bec_type(nkb_d, nbnd, becp_tmp_d)
+          CALL calbec(ngk(ik_cache), vkb_d, evc_tmp, becp_tmp_d)
+          IF (lspinorb) THEN
+             becd_cache(:, :, :, ik_cache) = becp_tmp_d%nc(:, :, :)
+          ELSE
+             becd_cache(:, 1, :, ik_cache) = becp_tmp_d%k(:, :)
+          ENDIF
+          CALL deallocate_bec_type(becp_tmp_d)
+
+          CALL get_betavkb(ngk(ik_cache), igk_k(1,ik_cache), xk(1,ik_cache), &
+                            vkb_p, V_p%nat, V_p%ityp, V_p%tau, nkb_p)
+          CALL allocate_bec_type(nkb_p, nbnd, becp_tmp_p)
+          CALL calbec(ngk(ik_cache), vkb_p, evc_tmp, becp_tmp_p)
+          IF (lspinorb) THEN
+             becp_cache(:, :, :, ik_cache) = becp_tmp_p%nc(:, :, :)
+          ELSE
+             becp_cache(:, 1, :, ik_cache) = becp_tmp_p%k(:, :)
+          ENDIF
+          CALL deallocate_bec_type(becp_tmp_p)
        ENDDO
 
        IF (ionode) THEN
           WRITE(stdout, '(5X,A,I4,A)') &
-               'Cached ', nks, ' pool-local k-points in real space'
+               'Cached ', nks, ' pool-local k-points (psir + becp)'
           FLUSH(stdout)
        ENDIF
 
@@ -780,6 +476,8 @@ CONTAINS
        ! V_folded is computed ON-THE-FLY for each (ki,kf) pair using the
        ! EXACT q = kf - ki (no BZ wrapping) to avoid exp(iG*r) phase errors.
        ALLOCATE(psir_recv(dffts%nnr, npol, nbnd_kept, nks_max))
+       ALLOCATE(becd_recv(nkb_d, npol, nbnd, nks_max))
+       ALLOCATE(becpr_recv(nkb_p, npol, nbnd, nks_max))
        ALLOCATE(phase_ki(nrr_k), phase_kf(nrr_k))
        edmatw_2d = czero
        npairs_done = 0
@@ -794,11 +492,17 @@ CONTAINS
              src_nks = nkbase
           ENDIF
 
-          ! Source pool broadcasts its cached wavefunctions to all pools
+          ! Source pool broadcasts its cached wavefunctions + becp to all pools
           IF (my_pool_id == ip) THEN
              psir_recv(:, :, :, 1:src_nks) = psir_cache(:, :, :, 1:nks)
+             becd_recv(:, :, :, 1:src_nks) = becd_cache(:, :, :, 1:nks)
+             becpr_recv(:, :, :, 1:src_nks) = becp_cache(:, :, :, 1:nks)
           ENDIF
           CALL MPI_Bcast(psir_recv, dffts%nnr * npol * nbnd_kept * src_nks * 2, &
+               MPI_DOUBLE_PRECISION, ip, inter_pool_comm, ierr_mpi)
+          CALL MPI_Bcast(becd_recv, nkb_d * npol * nbnd * src_nks * 2, &
+               MPI_DOUBLE_PRECISION, ip, inter_pool_comm, ierr_mpi)
+          CALL MPI_Bcast(becpr_recv, nkb_p * npol * nbnd * src_nks * 2, &
                MPI_DOUBLE_PRECISION, ip, inter_pool_comm, ierr_mpi)
 
           ! Process all (ki_local, kf_from_src) pairs
@@ -861,6 +565,7 @@ CONTAINS
 
                 DO ib_i = 1, nbnd_kept
                    DO ib_j = 1, nbnd_kept
+                      ! LOCAL part
                       mlocal = czero
                       DO ipol_cache = 1, npol
                          DO ir = 1, dffts%nnr
@@ -868,9 +573,110 @@ CONTAINS
                                  psir_kq(ir, ipol_cache, ib_j) * V_folded_kf(ir)
                          ENDDO
                       ENDDO
-                      edmatkq(ib_i, ib_j) = mlocal / DBLE(dffts%nnr)
+                      mlocal = mlocal / DBLE(dffts%nnr)
+
+                      ! NONLOCAL defect: becp_ki from cache, becp_kf from recv
+                      mnl_d = czero
+                      ijkb0 = 0
+                      DO nt = 1, V_d%ntyp
+                         DO na = 1, V_d%nat
+                            IF (V_d%ityp(na) == nt) THEN
+                               IF (lspinorb) THEN
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_d = mnl_d + &
+                                          CONJG(becd_cache(ikb,1,band_map(ib_i),ik)) * becd_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(ih,ih,1,nt) + &
+                                          CONJG(becd_cache(ikb,1,band_map(ib_i),ik)) * becd_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(ih,ih,2,nt) + &
+                                          CONJG(becd_cache(ikb,2,band_map(ib_i),ik)) * becd_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(ih,ih,3,nt) + &
+                                          CONJG(becd_cache(ikb,2,band_map(ib_i),ik)) * becd_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(ih,ih,4,nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_d = mnl_d + &
+                                             CONJG(becd_cache(ikb,1,band_map(ib_i),ik)) * becd_recv(jkb,1,band_map(ib_j),ikf_local) * dvan_so(ih,jh,1,nt) + &
+                                             CONJG(becd_cache(jkb,1,band_map(ib_i),ik)) * becd_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(jh,ih,1,nt) + &
+                                             CONJG(becd_cache(ikb,1,band_map(ib_i),ik)) * becd_recv(jkb,2,band_map(ib_j),ikf_local) * dvan_so(ih,jh,2,nt) + &
+                                             CONJG(becd_cache(jkb,1,band_map(ib_i),ik)) * becd_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(jh,ih,2,nt) + &
+                                             CONJG(becd_cache(ikb,2,band_map(ib_i),ik)) * becd_recv(jkb,1,band_map(ib_j),ikf_local) * dvan_so(ih,jh,3,nt) + &
+                                             CONJG(becd_cache(jkb,2,band_map(ib_i),ik)) * becd_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(jh,ih,3,nt) + &
+                                             CONJG(becd_cache(ikb,2,band_map(ib_i),ik)) * becd_recv(jkb,2,band_map(ib_j),ikf_local) * dvan_so(ih,jh,4,nt) + &
+                                             CONJG(becd_cache(jkb,2,band_map(ib_i),ik)) * becd_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(jh,ih,4,nt)
+                                     ENDDO
+                                  ENDDO
+                               ELSE
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_d = mnl_d + CONJG(becd_cache(ikb,1,band_map(ib_i),ik)) * &
+                                          becd_recv(ikb,1,band_map(ib_j),ikf_local) * dvan(ih, ih, nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_d = mnl_d + &
+                                             (CONJG(becd_cache(ikb,1,band_map(ib_i),ik)) * becd_recv(jkb,1,band_map(ib_j),ikf_local) + &
+                                              CONJG(becd_cache(jkb,1,band_map(ib_i),ik)) * becd_recv(ikb,1,band_map(ib_j),ikf_local)) * &
+                                             dvan(ih, jh, nt)
+                                     ENDDO
+                                  ENDDO
+                               ENDIF
+                               ijkb0 = ijkb0 + nh(nt)
+                            ENDIF
+                         ENDDO
+                      ENDDO
+
+                      ! NONLOCAL pristine
+                      mnl_p = czero
+                      ijkb0 = 0
+                      DO nt = 1, V_p%ntyp
+                         DO na = 1, V_p%nat
+                            IF (V_p%ityp(na) == nt) THEN
+                               IF (lspinorb) THEN
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_p = mnl_p + &
+                                          CONJG(becp_cache(ikb,1,band_map(ib_i),ik)) * becpr_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(ih,ih,1,nt) + &
+                                          CONJG(becp_cache(ikb,1,band_map(ib_i),ik)) * becpr_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(ih,ih,2,nt) + &
+                                          CONJG(becp_cache(ikb,2,band_map(ib_i),ik)) * becpr_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(ih,ih,3,nt) + &
+                                          CONJG(becp_cache(ikb,2,band_map(ib_i),ik)) * becpr_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(ih,ih,4,nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_p = mnl_p + &
+                                             CONJG(becp_cache(ikb,1,band_map(ib_i),ik)) * becpr_recv(jkb,1,band_map(ib_j),ikf_local) * dvan_so(ih,jh,1,nt) + &
+                                             CONJG(becp_cache(jkb,1,band_map(ib_i),ik)) * becpr_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(jh,ih,1,nt) + &
+                                             CONJG(becp_cache(ikb,1,band_map(ib_i),ik)) * becpr_recv(jkb,2,band_map(ib_j),ikf_local) * dvan_so(ih,jh,2,nt) + &
+                                             CONJG(becp_cache(jkb,1,band_map(ib_i),ik)) * becpr_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(jh,ih,2,nt) + &
+                                             CONJG(becp_cache(ikb,2,band_map(ib_i),ik)) * becpr_recv(jkb,1,band_map(ib_j),ikf_local) * dvan_so(ih,jh,3,nt) + &
+                                             CONJG(becp_cache(jkb,2,band_map(ib_i),ik)) * becpr_recv(ikb,1,band_map(ib_j),ikf_local) * dvan_so(jh,ih,3,nt) + &
+                                             CONJG(becp_cache(ikb,2,band_map(ib_i),ik)) * becpr_recv(jkb,2,band_map(ib_j),ikf_local) * dvan_so(ih,jh,4,nt) + &
+                                             CONJG(becp_cache(jkb,2,band_map(ib_i),ik)) * becpr_recv(ikb,2,band_map(ib_j),ikf_local) * dvan_so(jh,ih,4,nt)
+                                     ENDDO
+                                  ENDDO
+                               ELSE
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_p = mnl_p + CONJG(becp_cache(ikb,1,band_map(ib_i),ik)) * &
+                                          becpr_recv(ikb,1,band_map(ib_j),ikf_local) * dvan(ih, ih, nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_p = mnl_p + &
+                                             (CONJG(becp_cache(ikb,1,band_map(ib_i),ik)) * becpr_recv(jkb,1,band_map(ib_j),ikf_local) + &
+                                              CONJG(becp_cache(jkb,1,band_map(ib_i),ik)) * becpr_recv(ikb,1,band_map(ib_j),ikf_local)) * &
+                                             dvan(ih, jh, nt)
+                                     ENDDO
+                                  ENDDO
+                               ENDIF
+                               ijkb0 = ijkb0 + nh(nt)
+                            ENDIF
+                         ENDDO
+                      ENDDO
+
+                      edmatkq(ib_i, ib_j) = mlocal + mnl_d - mnl_p
+                      edmatkq_loc(ib_i, ib_j) = mlocal
+                      edmatkq_nl(ib_i, ib_j) = mnl_d - mnl_p
                    ENDDO
                 ENDDO
+
+                ! Store Bloch-basis M for output (before Wannier rotation)
+                edmat_bloch(:, :, ik_global, ikf_global) = edmatkq(:, :)
+                edmat_bloch_loc(:, :, ik_global, ikf_global) = edmatkq_loc(:, :)
+                edmat_bloch_nl(:, :, ik_global, ikf_global) = edmatkq_nl(:, :)
 
                 ! Wannier rotation: M_W = U_dag(ki) M_B U(kf)
                 cu_k  = cu_all(:, :, ik_global)
@@ -909,14 +715,59 @@ CONTAINS
        ENDDO  ! ip (source pool)
 
        DEALLOCATE(phase_ki, phase_kf, psir_recv, psir_cache)
+       DEALLOCATE(becd_cache, becd_recv, becp_cache, becpr_recv)
 
        ! Gather FT contributions from all pools
        CALL mp_sum(edmatw_2d, inter_pool_comm)
     END BLOCK
 
+    ! Gather Bloch-basis M from all pools and write to file
+    CALL mp_sum(edmat_bloch, inter_pool_comm)
+    CALL mp_sum(edmat_bloch_loc, inter_pool_comm)
+    CALL mp_sum(edmat_bloch_nl, inter_pool_comm)
+
+    IF (ionode) THEN
+       BLOCK
+          INTEGER :: iunit_b, iki_b, ikf_b, ib1, ib2
+          CHARACTER(LEN=256) :: fname_b
+
+          fname_b = TRIM(prefix_in) // '_edmat_bloch.dat'
+          iunit_b = 89
+          OPEN(iunit_b, FILE=TRIM(fname_b), FORM='formatted')
+          WRITE(iunit_b, '(A)') '# Bloch-basis M(n,m,ki,kf) from ed_coarse_full_q (before Wannier rotation)'
+          WRITE(iunit_b, '(A,I6,A,I4)') '# nkstot=', nkstot, '  nbnd_kept=', nbnd_kept
+          WRITE(iunit_b, '(A)') '# iki ikf  kix kiy kiz  kfx kfy kfz  ibnd jbnd  |M|^2  Re(M)  Im(M)  |M_loc|^2  |M_nl|^2'
+
+          DO iki_b = 1, nkstot
+             DO ikf_b = 1, nkstot
+                DO ib1 = 1, nbnd_kept
+                   DO ib2 = 1, nbnd_kept
+                      IF (ABS(edmat_bloch(ib1, ib2, iki_b, ikf_b)) < 1.0d-30) CYCLE
+                      WRITE(iunit_b, '(2I6,6F10.5,2I4,5ES16.8)') &
+                           iki_b, ikf_b, &
+                           xk_cryst_all(:, iki_b), xk_cryst_all(:, ikf_b), &
+                           ib1, ib2, &
+                           ABS(edmat_bloch(ib1, ib2, iki_b, ikf_b))**2, &
+                           REAL(edmat_bloch(ib1, ib2, iki_b, ikf_b)), &
+                           AIMAG(edmat_bloch(ib1, ib2, iki_b, ikf_b)), &
+                           ABS(edmat_bloch_loc(ib1, ib2, iki_b, ikf_b))**2, &
+                           ABS(edmat_bloch_nl(ib1, ib2, iki_b, ikf_b))**2
+                   ENDDO
+                ENDDO
+             ENDDO
+          ENDDO
+
+          CLOSE(iunit_b)
+          WRITE(stdout, '(5X,A,A)') 'Bloch-basis M written to ', TRIM(fname_b)
+       END BLOCK
+    ENDIF
+
+    DEALLOCATE(edmat_bloch, edmat_bloch_loc, edmat_bloch_nl)
+    DEALLOCATE(edmatkq_loc, edmatkq_nl)
 
 
-    DEALLOCATE(psir_k, psir_kq, psic_tmp, evc_tmp, V_folded_kf)
+
+    DEALLOCATE(psir_k, psir_kq, psic_tmp, evc_tmp, V_folded_kf, vkb_d, vkb_p)
     DEALLOCATE(edmatkq, cu_k, cu_kq, edms, eptmp)
     DEALLOCATE(xk_cryst_loc, xk_cryst_all, cu_all, band_map)
 
@@ -1437,21 +1288,20 @@ CONTAINS
 
   SUBROUTINE load_supercell_pot(prefix_in, outdir_in, vf_out)
     !-----------------------------------------------------------------------
-    ! Load supercell potential: ionode reads serially, broadcasts to all.
+    ! Load supercell KS potential via get_vloc_onthefly on ionode.
     !
-    ! Strategy:
-    !   1. ALL ranks collectively clean_pw(.TRUE.) to free memory
-    !   2. ionode sets communicators to MPI_COMM_SELF and calls
-    !      get_vloc_onthefly (serial: only ~2GB needed on 1 rank)
-    !   3. ionode cleans up supercell QE state
-    !   4. ionode broadcasts the extracted potential to all ranks
+    ! Uses MPI_COMM_SELF so ionode runs as a standalone single-rank QE.
+    ! Does NOT call clean_pw — the caller is responsible for cleanup.
+    ! This allows consecutive calls (V_d then V_p) where the second call
+    ! overwrites the first call's QE state in-place (same dimensions).
+    ! Calling clean_pw between loads would corrupt QE's internal state.
     !-----------------------------------------------------------------------
     USE io_global, ONLY : ionode, ionode_id, stdout
     USE mp_world, ONLY : world_comm
     USE mp_pools, ONLY : intra_pool_comm, inter_pool_comm, npool, my_pool_id
     USE mp_bands, ONLY : intra_bgrp_comm, inter_bgrp_comm, nbgrp
     USE mp_images, ONLY : intra_image_comm, nimage
-    USE mp, ONLY : mp_bcast, mp_barrier
+    USE mp, ONLY : mp_bcast
     USE io_files, ONLY : prefix, tmp_dir
     USE edic_mod, ONLY : V_file
     USE parallel_include
@@ -1478,7 +1328,7 @@ CONTAINS
     REAL(dp), ALLOCATABLE :: pot_tmp(:)
     CHARACTER(LEN=256) :: save_prefix, save_tmpdir
 
-    ! Save ALL state
+    ! Save communicator state
     save_world = world_comm
     save_pool = intra_pool_comm
     save_inter_pool = inter_pool_comm
@@ -1492,10 +1342,8 @@ CONTAINS
     save_prefix = prefix
     save_tmpdir = tmp_dir
 
-    ! Step 1: ALL ranks collectively clean QE state (free memory)
-    CALL clean_pw(.TRUE.)
-
-    ! Step 2: ionode reads supercell potential serially
+    ! ionode reads supercell as standalone single-rank QE
+    ! NO clean_pw before — let read_file_new overwrite previous state in-place
     IF (ionode) THEN
        world_comm = MPI_COMM_SELF
        intra_pool_comm = MPI_COMM_SELF
@@ -1509,10 +1357,10 @@ CONTAINS
        nimage = 1
 
        CALL get_vloc_onthefly(prefix_in, outdir_in, vf_out, .FALSE.)
-       CALL clean_pw(.TRUE.)
+       ! NO clean_pw after — preserve state for potential next load
     ENDIF
 
-    ! Step 3: Restore ALL state on ALL ranks
+    ! Restore communicator state
     world_comm = save_world
     intra_pool_comm = save_pool
     inter_pool_comm = save_inter_pool
@@ -1526,26 +1374,24 @@ CONTAINS
     prefix = save_prefix
     tmp_dir = save_tmpdir
 
-    ! Step 4: Broadcast potential data from ionode to all ranks
-    ! Use MPI_Bcast with explicit counts — ionode's pot array may be
-    ! larger than nr1*nr2*nr3 due to FFT padding (dfftp%nnr > nr1*nr2*nr3)
-    CALL MPI_Bcast(vf_out%nr1, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%nr2, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%nr3, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%nr1x, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%nr2x, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%nr3x, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%nat, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%ntyp, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%alat, 1, MPI_DOUBLE_PRECISION, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%ibrav, 1, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%celldm, 6, MPI_DOUBLE_PRECISION, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%at, 9, MPI_DOUBLE_PRECISION, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%omega, 1, MPI_DOUBLE_PRECISION, ionode_id, world_comm, ierr)
+    ! Broadcast from ionode to all ranks
+    CALL mp_bcast(vf_out%nr1, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr2, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr3, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr1x, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr2x, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr3x, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nat, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%ntyp, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%alat, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%ibrav, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%celldm, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%at, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%omega, ionode_id, world_comm)
 
     nrtot = vf_out%nr1 * vf_out%nr2 * vf_out%nr3
 
-    ! On ionode, pot may have FFT padding (size > nrtot). Trim to nrtot.
+    ! Trim ionode's pot to logical grid (remove FFT padding if any)
     IF (ionode) THEN
        ALLOCATE(pot_tmp(nrtot))
        pot_tmp(:) = vf_out%pot(1:nrtot)
@@ -1558,15 +1404,176 @@ CONTAINS
        ALLOCATE(vf_out%ityp(vf_out%nat))
        ALLOCATE(vf_out%tau(3, vf_out%nat))
     ENDIF
-    CALL MPI_Bcast(vf_out%pot, nrtot, MPI_DOUBLE_PRECISION, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%ityp, vf_out%nat, MPI_INTEGER, ionode_id, world_comm, ierr)
-    CALL MPI_Bcast(vf_out%tau, 3*vf_out%nat, MPI_DOUBLE_PRECISION, ionode_id, world_comm, ierr)
+    CALL mp_bcast(vf_out%pot, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%ityp, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%tau, ionode_id, world_comm)
 
     IF (ionode) WRITE(stdout, '(5X,A,3I6,A,I6)') &
          '  grid: ', vf_out%nr1, vf_out%nr2, vf_out%nr3, &
          '  nat:', vf_out%nat
 
   END SUBROUTINE load_supercell_pot
+
+
+  SUBROUTINE load_pot_from_file(potfile, vf_out)
+    !-----------------------------------------------------------------------
+    ! Read supercell KS potential from a Gaussian cube file written by
+    ! extract_pot.x. ionode reads, broadcasts to all ranks.
+    !
+    ! The cube file contains V_total = V_Hxc + V_ionic in Ry on the
+    ! supercell FFT grid. Also extracts atomic positions (nat, ityp, tau)
+    ! needed for the nonlocal matrix element computation.
+    !
+    ! Cube format: x outermost loop, z innermost.
+    ! Stored in vf_out%pot with x-fastest ordering (QE convention):
+    !   pot(ix + iy*nr1 + iz*nr1*nr2 + 1)
+    !-----------------------------------------------------------------------
+    USE io_global, ONLY : ionode, ionode_id, stdout
+    USE mp_world, ONLY : world_comm
+    USE mp, ONLY : mp_bcast
+    USE cell_base, ONLY : alat_prim => alat
+    USE edic_mod, ONLY : V_file
+    IMPLICIT NONE
+
+    CHARACTER(LEN=*), INTENT(IN) :: potfile
+    TYPE(V_file), INTENT(INOUT) :: vf_out
+
+    INTEGER :: iunit, nrtot, ia, irx, iry, irz, idx
+    INTEGER :: nr1, nr2, nr3
+    REAL(dp) :: voxel1(3), voxel2(3), voxel3(3), origin(3)
+    REAL(dp) :: at_charge, val
+    CHARACTER(LEN=256) :: line
+
+    iunit = 98
+
+    IF (ionode) THEN
+       OPEN(iunit, FILE=TRIM(potfile), STATUS='old', ACTION='read')
+
+       ! Header: 2 comment lines
+       READ(iunit, '(A)') line
+       READ(iunit, '(A)') line
+
+       ! Number of atoms and origin
+       READ(iunit, *) vf_out%nat, origin(1), origin(2), origin(3)
+
+       ! Grid dimensions and voxel vectors
+       READ(iunit, *) nr1, voxel1(1), voxel1(2), voxel1(3)
+       READ(iunit, *) nr2, voxel2(1), voxel2(2), voxel2(3)
+       READ(iunit, *) nr3, voxel3(1), voxel3(2), voxel3(3)
+       vf_out%nr1 = nr1; vf_out%nr2 = nr2; vf_out%nr3 = nr3
+       vf_out%nr1x = nr1; vf_out%nr2x = nr2; vf_out%nr3x = nr3
+       nrtot = nr1 * nr2 * nr3
+
+       ! Reconstruct lattice vectors and alat from voxels
+       ! Cube stores positions in bohr. Convert to QE convention:
+       !   at in units of alat, tau in units of alat
+       ! Use the primitive cell's alat (from cell_base, still loaded)
+       vf_out%alat = alat_prim
+       vf_out%at(:,1) = voxel1(:) * DBLE(nr1) / alat_prim
+       vf_out%at(:,2) = voxel2(:) * DBLE(nr2) / alat_prim
+       vf_out%at(:,3) = voxel3(:) * DBLE(nr3) / alat_prim
+       vf_out%omega = ABS( &
+            vf_out%at(1,1)*(vf_out%at(2,2)*vf_out%at(3,3) - vf_out%at(3,2)*vf_out%at(2,3)) - &
+            vf_out%at(2,1)*(vf_out%at(1,2)*vf_out%at(3,3) - vf_out%at(3,2)*vf_out%at(1,3)) + &
+            vf_out%at(3,1)*(vf_out%at(1,2)*vf_out%at(2,3) - vf_out%at(2,2)*vf_out%at(1,3)) ) &
+            * alat_prim**3
+       vf_out%ibrav = 0
+       vf_out%celldm = 0.0_dp
+       vf_out%celldm(1) = alat_prim
+
+       ! Atomic positions (cube format: ityp, charge, x, y, z in bohr)
+       ! Convert from bohr to units of alat (QE convention for get_betavkb)
+       vf_out%ntyp = 0
+       ALLOCATE(vf_out%ityp(vf_out%nat))
+       ALLOCATE(vf_out%tau(3, vf_out%nat))
+       DO ia = 1, vf_out%nat
+          READ(iunit, *) vf_out%ityp(ia), at_charge, &
+               vf_out%tau(1,ia), vf_out%tau(2,ia), vf_out%tau(3,ia)
+          ! Convert tau from bohr to alat units
+          vf_out%tau(:,ia) = vf_out%tau(:,ia) / alat_prim
+          IF (vf_out%ityp(ia) > vf_out%ntyp) vf_out%ntyp = vf_out%ityp(ia)
+       ENDDO
+
+       ! Read volumetric data: cube format packs up to 6 values per line.
+       ! Cube order: x outermost, z innermost.
+       ! Store in x-fastest order: pot(ix + iy*nr1 + iz*nr1*nr2 + 1)
+       BLOCK
+          REAL(dp), ALLOCATABLE :: raw(:)
+          INTEGER :: iraw, nlines, nvals_line, ipos
+          REAL(dp) :: buf(6)
+
+          ALLOCATE(raw(nrtot))
+          iraw = 0
+          DO WHILE (iraw < nrtot)
+             ! Read one line — may contain up to 6 values
+             nvals_line = MIN(6, nrtot - iraw)
+             READ(iunit, *, END=900) buf(1:nvals_line)
+             DO ipos = 1, nvals_line
+                iraw = iraw + 1
+                raw(iraw) = buf(ipos)
+             ENDDO
+          ENDDO
+900       CONTINUE
+
+          ! Reorder: cube is (x outer, z inner) → QE is (x fastest)
+          ALLOCATE(vf_out%pot(nrtot))
+          iraw = 0
+          DO irx = 0, nr1 - 1
+             DO iry = 0, nr2 - 1
+                DO irz = 0, nr3 - 1
+                   iraw = iraw + 1
+                   idx = irx + iry * nr1 + irz * nr1 * nr2 + 1
+                   vf_out%pot(idx) = raw(iraw)
+                ENDDO
+             ENDDO
+          ENDDO
+          DEALLOCATE(raw)
+       END BLOCK
+
+       CLOSE(iunit)
+
+       WRITE(stdout, '(5X,A,A)') 'Read potential from cube: ', TRIM(potfile)
+       WRITE(stdout, '(5X,A,3I6,A,I6)') '  grid: ', nr1, nr2, nr3, '  nat:', vf_out%nat
+       WRITE(stdout, '(5X,A,2ES14.6)') '  V min/max = ', MINVAL(vf_out%pot), MAXVAL(vf_out%pot)
+    ENDIF
+
+    ! Broadcast to all ranks
+    CALL mp_bcast(vf_out%nr1, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr2, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr3, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr1x, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr2x, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nr3x, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%nat, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%ntyp, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%alat, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%ibrav, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%omega, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%celldm, ionode_id, world_comm)
+    CALL mp_bcast(vf_out%at, ionode_id, world_comm)
+
+    nrtot = vf_out%nr1 * vf_out%nr2 * vf_out%nr3
+    IF (.NOT. ionode) THEN
+       ALLOCATE(vf_out%pot(nrtot))
+       ALLOCATE(vf_out%ityp(vf_out%nat))
+       ALLOCATE(vf_out%tau(3, vf_out%nat))
+    ENDIF
+
+    BLOCK
+       USE parallel_include
+       INTEGER :: ierr
+       CALL MPI_Bcast(vf_out%pot, nrtot, MPI_DOUBLE_PRECISION, &
+            ionode_id, world_comm, ierr)
+       CALL MPI_Bcast(vf_out%ityp, vf_out%nat, MPI_INTEGER, &
+            ionode_id, world_comm, ierr)
+       CALL MPI_Bcast(vf_out%tau, 3*vf_out%nat, MPI_DOUBLE_PRECISION, &
+            ionode_id, world_comm, ierr)
+    END BLOCK
+
+  END SUBROUTINE load_pot_from_file
+
+
+
 
   SUBROUTINE read_filukk_edi(fname, nbnd, nkstot, nks, nbndsub)
     !-----------------------------------------------------------------------
@@ -1883,12 +1890,15 @@ CONTAINS
     USE cell_base, ONLY : at
     USE klist, ONLY : xk, igk_k, ngk, nkstot, nks
     USE wvfct, ONLY : npwx, nbnd
-    USE noncollin_module, ONLY : npol
+    USE noncollin_module, ONLY : npol, lspinorb
     USE fft_base, ONLY : dffts
     USE fft_interfaces, ONLY : invfft
     USE io_files, ONLY : restart_dir
     USE pw_restart_new, ONLY : read_collected_wfc
-    USE edic_mod, ONLY : V_d, V_colin
+    USE edic_mod, ONLY : V_d, V_p, V_colin
+    USE uspp_param, ONLY : nh
+    USE uspp, ONLY : dvan, dvan_so
+    USE becmod, ONLY : bec_type, calbec, allocate_bec_type, deallocate_bec_type
     USE ep_constants, ONLY : czero, cone
     USE constants, ONLY : tpi
     USE parallelism, ONLY : fkbounds
@@ -1901,12 +1911,15 @@ CONTAINS
     INTEGER :: ig, ir, inr, irx, iry, irz, ir1mod, ir2mod, ir3mod, irnmod
     INTEGER :: iunit, lower_bnd, upper_bnd, nbnd_kept
     INTEGER :: ibnd_min, ibnd_max, ipos, ios_parse
+    INTEGER :: na, nt, ih, jh, ikb, jkb, ijkb0, nkb_d, nkb_p
     REAL(dp), ALLOCATABLE :: xki(:,:), xkf(:,:), xk_cryst_nscf(:,:)
     REAL(dp) :: qcryst(3), d1, d2, d3, arg, diff(3)
-    COMPLEX(dp) :: phase, mlocal
+    COMPLEX(dp) :: phase, mlocal, mnl_d, mnl_p
     COMPLEX(dp), ALLOCATABLE :: psir_ki(:,:,:), psir_kf(:,:,:)
     COMPLEX(dp), ALLOCATABLE :: evc_tmp(:,:), psic_tmp(:)
     COMPLEX(dp), ALLOCATABLE :: V_folded(:), edmatkq(:,:)
+    COMPLEX(dp), ALLOCATABLE :: edmatkq_loc(:,:), edmatkq_nl(:,:)
+    COMPLEX(dp), ALLOCATABLE :: vkb_d(:,:), vkb_p(:,:)
     INTEGER :: ipol_d
     INTEGER, ALLOCATABLE :: iki_map(:), ikf_map(:)
     CHARACTER(LEN=256) :: fname
@@ -2013,13 +2026,34 @@ CONTAINS
     ! Panel broadcast: cache local wfcs, broadcast per pool (same as double-FT)
     ALLOCATE(psic_tmp(dffts%nnr))
     ALLOCATE(evc_tmp(npwx * npol, nbnd))
+    ! Count nonlocal projectors
+    nkb_d = 0
+    DO nt = 1, V_d%ntyp
+       DO na = 1, V_d%nat
+          IF (V_d%ityp(na) == nt) nkb_d = nkb_d + nh(nt)
+       ENDDO
+    ENDDO
+    nkb_p = 0
+    DO nt = 1, V_p%ntyp
+       DO na = 1, V_p%nat
+          IF (V_p%ityp(na) == nt) nkb_p = nkb_p + nh(nt)
+       ENDDO
+    ENDDO
+    ALLOCATE(vkb_d(npwx, nkb_d))
+    ALLOCATE(vkb_p(npwx, nkb_p))
     ALLOCATE(V_folded(dffts%nnr))
     ALLOCATE(edmatkq(nbnd_kept, nbnd_kept))
+    ALLOCATE(edmatkq_loc(nbnd_kept, nbnd_kept))
+    ALLOCATE(edmatkq_nl(nbnd_kept, nbnd_kept))
     ALLOCATE(psir_ki(dffts%nnr, npol, nbnd_kept))
     ALLOCATE(psir_kf(dffts%nnr, npol, nbnd_kept))
 
     BLOCK
        COMPLEX(dp), ALLOCATABLE :: psir_cache(:,:,:,:), psir_recv(:,:,:,:)
+       COMPLEX(dp), ALLOCATABLE :: becd_cache(:,:,:,:), becd_recv(:,:,:,:)
+       COMPLEX(dp), ALLOCATABLE :: becpc_cache(:,:,:,:), becpc_recv(:,:,:,:)
+       COMPLEX(dp), ALLOCATABLE :: becd_ki(:,:,:), becpc_ki(:,:,:)
+       TYPE(bec_type) :: becp_tmp_d, becp_tmp_p
        INTEGER :: ik_cache, ib_cache, ig_cache, npairs_done, ipol_c
        INTEGER :: ip, src_lower, src_nks, nkbase, nkrest, nks_max
        INTEGER :: ikf_local, ik_pool, ik_l
@@ -2029,11 +2063,16 @@ CONTAINS
        nks_max = nkbase
        IF (nkrest > 0) nks_max = nkbase + 1
 
-       ! Step 1: Cache pool-local wavefunctions in real space (read disk ONCE)
-       ! Only bands ibnd_min..ibnd_max are stored (index 1..nbnd_kept)
+       ! Step 1: Cache pool-local wavefunctions + becp in real space (read disk ONCE)
        ALLOCATE(psir_cache(dffts%nnr, npol, nbnd_kept, nks))
+       ALLOCATE(becd_cache(nkb_d, npol, nbnd, nks))
+       ALLOCATE(becpc_cache(nkb_p, npol, nbnd, nks))
+       becd_cache = czero
+       becpc_cache = czero
+
        DO ik_cache = 1, nks
           CALL read_collected_wfc(restart_dir(), ik_cache, evc_tmp)
+          ! FFT to real space
           DO ib_cache = 1, nbnd_kept
              DO ipol_c = 1, npol
                 psic_tmp = (0.0_dp, 0.0_dp)
@@ -2045,27 +2084,61 @@ CONTAINS
                 psir_cache(:, ipol_c, ib_cache, ik_cache) = psic_tmp
              ENDDO
           ENDDO
+          ! Compute and cache beta projections
+          CALL get_betavkb(ngk(ik_cache), igk_k(1,ik_cache), xk(1,ik_cache), &
+                            vkb_d, V_d%nat, V_d%ityp, V_d%tau, nkb_d)
+          CALL allocate_bec_type(nkb_d, nbnd, becp_tmp_d)
+          CALL calbec(ngk(ik_cache), vkb_d, evc_tmp, becp_tmp_d)
+          IF (lspinorb) THEN
+             becd_cache(:, :, :, ik_cache) = becp_tmp_d%nc(:, :, :)
+          ELSE
+             becd_cache(:, 1, :, ik_cache) = becp_tmp_d%k(:, :)
+          ENDIF
+          CALL deallocate_bec_type(becp_tmp_d)
+
+          CALL get_betavkb(ngk(ik_cache), igk_k(1,ik_cache), xk(1,ik_cache), &
+                            vkb_p, V_p%nat, V_p%ityp, V_p%tau, nkb_p)
+          CALL allocate_bec_type(nkb_p, nbnd, becp_tmp_p)
+          CALL calbec(ngk(ik_cache), vkb_p, evc_tmp, becp_tmp_p)
+          IF (lspinorb) THEN
+             becpc_cache(:, :, :, ik_cache) = becp_tmp_p%nc(:, :, :)
+          ELSE
+             becpc_cache(:, 1, :, ik_cache) = becp_tmp_p%k(:, :)
+          ENDIF
+          CALL deallocate_bec_type(becp_tmp_p)
        ENDDO
 
        IF (ionode) THEN
           WRITE(stdout, '(5X,A,I4,A)') &
-               'Cached ', nks, ' pool-local k-points in real space'
+               'Cached ', nks, ' pool-local k-points (psir + becp)'
           FLUSH(stdout)
        ENDIF
 
-       ! Step 2: Get psi(ki) — find in local cache or receive via panel broadcast
-       ! For now, broadcast ki from owning pool (only nki broadcasts, typically 1)
+       ! Step 2: Get psi(ki) + becp(ki) — broadcast from owning pool
+       ALLOCATE(becd_ki(nkb_d, npol, nbnd))
+       ALLOCATE(becpc_ki(nkb_p, npol, nbnd))
        DO iki = 1, nki
           CALL get_pool_and_local(iki_map(iki), nkstot, npool, ik_pool, ik_l)
           psir_ki = (0.0_dp, 0.0_dp)
-          IF (my_pool_id == ik_pool) psir_ki(:,:,:) = psir_cache(:,:,:,ik_l)
+          becd_ki = czero
+          becpc_ki = czero
+          IF (my_pool_id == ik_pool) THEN
+             psir_ki(:,:,:) = psir_cache(:,:,:,ik_l)
+             becd_ki(:,:,:) = becd_cache(:,:,:,ik_l)
+             becpc_ki(:,:,:) = becpc_cache(:,:,:,ik_l)
+          ENDIF
           CALL MPI_Bcast(psir_ki, dffts%nnr * npol * nbnd_kept * 2, &
                MPI_DOUBLE_PRECISION, ik_pool, inter_pool_comm, ierr_mpi)
+          CALL MPI_Bcast(becd_ki, nkb_d * npol * nbnd * 2, &
+               MPI_DOUBLE_PRECISION, ik_pool, inter_pool_comm, ierr_mpi)
+          CALL MPI_Bcast(becpc_ki, nkb_p * npol * nbnd * 2, &
+               MPI_DOUBLE_PRECISION, ik_pool, inter_pool_comm, ierr_mpi)
        ENDDO
-       ! (psir_ki now holds the last ki — fine for nki=1)
 
        ! Step 3: Panel broadcast for kf — iterate over source pools
        ALLOCATE(psir_recv(dffts%nnr, npol, nbnd_kept, nks_max))
+       ALLOCATE(becd_recv(nkb_d, npol, nbnd, nks_max))
+       ALLOCATE(becpc_recv(nkb_p, npol, nbnd, nks_max))
 
        iunit = 87
        IF (ionode) THEN
@@ -2074,10 +2147,46 @@ CONTAINS
           WRITE(iunit, '(A)') '# Direct e-d matrix elements M(n,m, k_i, k_f)'
           WRITE(iunit, '(A,I6,A,I6)') '# nki=', nki, ' nkf=', nkf
           WRITE(iunit, '(A,I4,A,I4)') '# band range: ', ibnd_min, ' - ', ibnd_max
-          WRITE(iunit, '(A)') '# iki ikf  kix kiy kiz  kfx kfy kfz  ibnd jbnd  |M|^2  Re(M)  Im(M)'
+          WRITE(iunit, '(A)') '# iki ikf  kix kiy kiz  kfx kfy kfz  ibnd jbnd  |M|^2  Re(M)  Im(M)  |M_loc|^2  |M_nl|^2'
        ENDIF
 
        npairs_done = 0
+
+       ! Distribute (iki,ikf) pairs across pools for parallel computation
+       BLOCK
+          INTEGER :: npairs_total, ipair, ipair_global, pair_iki, pair_ikf
+          INTEGER :: my_pair_lo, my_pair_hi, npairs_local
+          INTEGER :: pairs_per_pool, pairs_extra
+          COMPLEX(dp), ALLOCATABLE :: edmatkq_all(:,:,:,:)
+          COMPLEX(dp), ALLOCATABLE :: edmatkq_loc_all(:,:,:,:)
+          COMPLEX(dp), ALLOCATABLE :: edmatkq_nl_all(:,:,:,:)
+
+          ! Allocate full result arrays (zero-initialized)
+          ALLOCATE(edmatkq_all(nbnd_kept, nbnd_kept, nki, nkf))
+          ALLOCATE(edmatkq_loc_all(nbnd_kept, nbnd_kept, nki, nkf))
+          ALLOCATE(edmatkq_nl_all(nbnd_kept, nbnd_kept, nki, nkf))
+          edmatkq_all = czero
+          edmatkq_loc_all = czero
+          edmatkq_nl_all = czero
+
+          npairs_total = nki * nkf
+          pairs_per_pool = npairs_total / npool
+          pairs_extra = MOD(npairs_total, npool)
+          IF (my_pool_id < pairs_extra) THEN
+             my_pair_lo = my_pool_id * (pairs_per_pool + 1) + 1
+             npairs_local = pairs_per_pool + 1
+          ELSE
+             my_pair_lo = pairs_extra * (pairs_per_pool + 1) + &
+                          (my_pool_id - pairs_extra) * pairs_per_pool + 1
+             npairs_local = pairs_per_pool
+          ENDIF
+          my_pair_hi = my_pair_lo + npairs_local - 1
+
+          IF (ionode) THEN
+             WRITE(stdout, '(5X,A,I8,A,I4)') &
+                  'Total pairs: ', npairs_total, '  npool: ', npool
+             FLUSH(stdout)
+          ENDIF
 
        DO ip = 0, npool - 1
           ! Determine k-point range of source pool ip
@@ -2089,19 +2198,29 @@ CONTAINS
              src_nks = nkbase
           ENDIF
 
-          ! Source pool broadcasts its cached wavefunctions
+          ! Source pool broadcasts its cached wavefunctions + becp
           IF (my_pool_id == ip) THEN
              psir_recv(:, :, :, 1:src_nks) = psir_cache(:, :, :, 1:nks)
+             becd_recv(:, :, :, 1:src_nks) = becd_cache(:, :, :, 1:nks)
+             becpc_recv(:, :, :, 1:src_nks) = becpc_cache(:, :, :, 1:nks)
           ENDIF
           CALL MPI_Bcast(psir_recv, dffts%nnr * npol * nbnd_kept * src_nks * 2, &
                MPI_DOUBLE_PRECISION, ip, inter_pool_comm, ierr_mpi)
+          CALL MPI_Bcast(becd_recv, nkb_d * npol * nbnd * src_nks * 2, &
+               MPI_DOUBLE_PRECISION, ip, inter_pool_comm, ierr_mpi)
+          CALL MPI_Bcast(becpc_recv, nkb_p * npol * nbnd * src_nks * 2, &
+               MPI_DOUBLE_PRECISION, ip, inter_pool_comm, ierr_mpi)
 
-          ! Process all kf that map to source pool ip's k-points
+          ! Process pairs assigned to this pool whose kf is in source pool ip
           DO iki = 1, nki
              DO ikf = 1, nkf
                 ! Check if this kf's NSCF index is in source pool ip's range
                 IF (ikf_map(ikf) < src_lower .OR. &
                     ikf_map(ikf) >= src_lower + src_nks) CYCLE
+
+                ! Check if this pair is assigned to my pool
+                ipair_global = (iki - 1) * nkf + ikf
+                IF (ipair_global < my_pair_lo .OR. ipair_global > my_pair_hi) CYCLE
 
                 ikf_local = ikf_map(ikf) - src_lower + 1
                 psir_kf(:,:,:) = psir_recv(:,:,:, ikf_local)
@@ -2145,9 +2264,10 @@ CONTAINS
                    ENDDO
                 ENDIF
 
-                ! Local matrix element: sum over spinor components
+                ! Matrix element: local + nonlocal
                 DO ibnd = 1, nbnd_kept
                    DO jbnd = 1, nbnd_kept
+                      ! LOCAL part
                       mlocal = czero
                       DO ipol_d = 1, npol
                          DO ir = 1, dffts%nnr
@@ -2155,45 +2275,161 @@ CONTAINS
                                  psir_kf(ir, ipol_d, jbnd) * V_folded(ir)
                          ENDDO
                       ENDDO
-                      edmatkq(ibnd, jbnd) = mlocal / DBLE(dffts%nnr)
+                      mlocal = mlocal / DBLE(dffts%nnr)
+
+                      ! NONLOCAL defect
+                      mnl_d = czero
+                      ijkb0 = 0
+                      DO nt = 1, V_d%ntyp
+                         DO na = 1, V_d%nat
+                            IF (V_d%ityp(na) == nt) THEN
+                               IF (lspinorb) THEN
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_d = mnl_d + &
+                                          CONJG(becd_ki(ikb,1,ibnd_min+ibnd-1)) * becd_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,1,nt) + &
+                                          CONJG(becd_ki(ikb,1,ibnd_min+ibnd-1)) * becd_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,2,nt) + &
+                                          CONJG(becd_ki(ikb,2,ibnd_min+ibnd-1)) * becd_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,3,nt) + &
+                                          CONJG(becd_ki(ikb,2,ibnd_min+ibnd-1)) * becd_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,4,nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_d = mnl_d + &
+                                             CONJG(becd_ki(ikb,1,ibnd_min+ibnd-1)) * becd_recv(jkb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,1,nt) + &
+                                             CONJG(becd_ki(jkb,1,ibnd_min+ibnd-1)) * becd_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,1,nt) + &
+                                             CONJG(becd_ki(ikb,1,ibnd_min+ibnd-1)) * becd_recv(jkb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,2,nt) + &
+                                             CONJG(becd_ki(jkb,1,ibnd_min+ibnd-1)) * becd_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,2,nt) + &
+                                             CONJG(becd_ki(ikb,2,ibnd_min+ibnd-1)) * becd_recv(jkb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,3,nt) + &
+                                             CONJG(becd_ki(jkb,2,ibnd_min+ibnd-1)) * becd_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,3,nt) + &
+                                             CONJG(becd_ki(ikb,2,ibnd_min+ibnd-1)) * becd_recv(jkb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,4,nt) + &
+                                             CONJG(becd_ki(jkb,2,ibnd_min+ibnd-1)) * becd_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,4,nt)
+                                     ENDDO
+                                  ENDDO
+                               ELSE
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_d = mnl_d + CONJG(becd_ki(ikb,1,ibnd_min+ibnd-1)) * &
+                                          becd_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan(ih, ih, nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_d = mnl_d + &
+                                             (CONJG(becd_ki(ikb,1,ibnd_min+ibnd-1)) * becd_recv(jkb,1,ibnd_min+jbnd-1,ikf_local) + &
+                                              CONJG(becd_ki(jkb,1,ibnd_min+ibnd-1)) * becd_recv(ikb,1,ibnd_min+jbnd-1,ikf_local)) * &
+                                             dvan(ih, jh, nt)
+                                     ENDDO
+                                  ENDDO
+                               ENDIF
+                               ijkb0 = ijkb0 + nh(nt)
+                            ENDIF
+                         ENDDO
+                      ENDDO
+
+                      ! NONLOCAL pristine
+                      mnl_p = czero
+                      ijkb0 = 0
+                      DO nt = 1, V_p%ntyp
+                         DO na = 1, V_p%nat
+                            IF (V_p%ityp(na) == nt) THEN
+                               IF (lspinorb) THEN
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_p = mnl_p + &
+                                          CONJG(becpc_ki(ikb,1,ibnd_min+ibnd-1)) * becpc_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,1,nt) + &
+                                          CONJG(becpc_ki(ikb,1,ibnd_min+ibnd-1)) * becpc_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,2,nt) + &
+                                          CONJG(becpc_ki(ikb,2,ibnd_min+ibnd-1)) * becpc_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,3,nt) + &
+                                          CONJG(becpc_ki(ikb,2,ibnd_min+ibnd-1)) * becpc_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,ih,4,nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_p = mnl_p + &
+                                             CONJG(becpc_ki(ikb,1,ibnd_min+ibnd-1)) * becpc_recv(jkb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,1,nt) + &
+                                             CONJG(becpc_ki(jkb,1,ibnd_min+ibnd-1)) * becpc_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,1,nt) + &
+                                             CONJG(becpc_ki(ikb,1,ibnd_min+ibnd-1)) * becpc_recv(jkb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,2,nt) + &
+                                             CONJG(becpc_ki(jkb,1,ibnd_min+ibnd-1)) * becpc_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,2,nt) + &
+                                             CONJG(becpc_ki(ikb,2,ibnd_min+ibnd-1)) * becpc_recv(jkb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,3,nt) + &
+                                             CONJG(becpc_ki(jkb,2,ibnd_min+ibnd-1)) * becpc_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,3,nt) + &
+                                             CONJG(becpc_ki(ikb,2,ibnd_min+ibnd-1)) * becpc_recv(jkb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(ih,jh,4,nt) + &
+                                             CONJG(becpc_ki(jkb,2,ibnd_min+ibnd-1)) * becpc_recv(ikb,2,ibnd_min+jbnd-1,ikf_local) * dvan_so(jh,ih,4,nt)
+                                     ENDDO
+                                  ENDDO
+                               ELSE
+                                  DO ih = 1, nh(nt)
+                                     ikb = ijkb0 + ih
+                                     mnl_p = mnl_p + CONJG(becpc_ki(ikb,1,ibnd_min+ibnd-1)) * &
+                                          becpc_recv(ikb,1,ibnd_min+jbnd-1,ikf_local) * dvan(ih, ih, nt)
+                                     DO jh = ih + 1, nh(nt)
+                                        jkb = ijkb0 + jh
+                                        mnl_p = mnl_p + &
+                                             (CONJG(becpc_ki(ikb,1,ibnd_min+ibnd-1)) * becpc_recv(jkb,1,ibnd_min+jbnd-1,ikf_local) + &
+                                              CONJG(becpc_ki(jkb,1,ibnd_min+ibnd-1)) * becpc_recv(ikb,1,ibnd_min+jbnd-1,ikf_local)) * &
+                                             dvan(ih, jh, nt)
+                                     ENDDO
+                                  ENDDO
+                               ENDIF
+                               ijkb0 = ijkb0 + nh(nt)
+                            ENDIF
+                         ENDDO
+                      ENDDO
+
+                      edmatkq(ibnd, jbnd) = mlocal + mnl_d - mnl_p
+                      edmatkq_loc(ibnd, jbnd) = mlocal
+                      edmatkq_nl(ibnd, jbnd) = mnl_d - mnl_p
+                      edmatkq_all(ibnd, jbnd, iki, ikf) = mlocal + mnl_d - mnl_p
+                      edmatkq_loc_all(ibnd, jbnd, iki, ikf) = mlocal
+                      edmatkq_nl_all(ibnd, jbnd, iki, ikf) = mnl_d - mnl_p
                    ENDDO
                 ENDDO
 
                 npairs_done = npairs_done + 1
-                IF (ionode) THEN
-                   DO ibnd = 1, nbnd_kept
-                      DO jbnd = 1, nbnd_kept
-                         WRITE(iunit, '(2I6,6F10.5,2I4,3ES16.8)') &
-                              iki, ikf, xki(:,iki), xkf(:,ikf), &
-                              ibnd_min + ibnd - 1, ibnd_min + jbnd - 1, &
-                              ABS(edmatkq(ibnd, jbnd))**2, &
-                              REAL(edmatkq(ibnd, jbnd)), AIMAG(edmatkq(ibnd, jbnd))
-                      ENDDO
-                   ENDDO
-                ENDIF
              ENDDO  ! ikf
           ENDDO  ! iki
 
           IF (ionode) THEN
-             WRITE(stdout, '(5X,A,I4,A,I4,A,I6,A,I6)') &
+             WRITE(stdout, '(5X,A,I4,A,I4,A,I6)') &
                   'kf pool ', ip, ' / ', npool - 1, &
-                  '  pairs: ', npairs_done, ' / ', nki * nkf
+                  '  my pairs so far: ', npairs_done
              FLUSH(stdout)
           ENDIF
        ENDDO  ! ip (source pool)
 
+       ! Gather results: use mp_sum on a full (nki,nkf,nbnd,nbnd) array
+       ! Each pool computed a non-overlapping subset of pairs, others are zero
+       CALL mp_sum(edmatkq_all, inter_pool_comm)
+       CALL mp_sum(edmatkq_loc_all, inter_pool_comm)
+       CALL mp_sum(edmatkq_nl_all, inter_pool_comm)
+
+       ! ionode writes ordered output
        IF (ionode) THEN
+          DO iki = 1, nki
+             DO ikf = 1, nkf
+                DO ibnd = 1, nbnd_kept
+                   DO jbnd = 1, nbnd_kept
+                      WRITE(iunit, '(2I6,6F10.5,2I4,5ES16.8)') &
+                           iki, ikf, xki(:,iki), xkf(:,ikf), &
+                           ibnd_min + ibnd - 1, ibnd_min + jbnd - 1, &
+                           ABS(edmatkq_all(ibnd, jbnd, iki, ikf))**2, &
+                           REAL(edmatkq_all(ibnd, jbnd, iki, ikf)), &
+                           AIMAG(edmatkq_all(ibnd, jbnd, iki, ikf)), &
+                           ABS(edmatkq_loc_all(ibnd, jbnd, iki, ikf))**2, &
+                           ABS(edmatkq_nl_all(ibnd, jbnd, iki, ikf))**2
+                   ENDDO
+                ENDDO
+             ENDDO
+          ENDDO
           CLOSE(iunit)
           fname = TRIM(prefix_in) // '_edmat_direct.dat'
-          WRITE(stdout, '(5X,A,A)') 'Written to ', TRIM(fname)
+          WRITE(stdout, '(5X,A,I6,A,A)') 'Total pairs: ', nki * nkf, &
+               '  Written to ', TRIM(fname)
           WRITE(stdout, '(5X,A)') REPEAT('=', 60)
        ENDIF
+       DEALLOCATE(edmatkq_all, edmatkq_loc_all, edmatkq_nl_all)
+       END BLOCK  ! pair distribution block
 
        DEALLOCATE(psir_cache, psir_recv)
+       DEALLOCATE(becd_cache, becd_recv, becpc_cache, becpc_recv)
+       DEALLOCATE(becd_ki, becpc_ki)
     END BLOCK
 
     DEALLOCATE(xki, xkf, xk_cryst_nscf, iki_map, ikf_map)
-    DEALLOCATE(evc_tmp, psic_tmp, psir_ki, psir_kf, V_folded, edmatkq)
+    DEALLOCATE(evc_tmp, psic_tmp, psir_ki, psir_kf, V_folded, edmatkq, edmatkq_loc, edmatkq_nl, vkb_d, vkb_p)
 
   CONTAINS
     SUBROUTINE get_pool_and_local(ik_g, nktot, np, ipool, ik_l)
@@ -2335,6 +2571,292 @@ CONTAINS
 
     DEALLOCATE(xki, xkf)
   END SUBROUTINE ed_interp_from_file
+
+
+  SUBROUTINE build_vcolin_aligned(vf_d, vf_p, vcolin, nrtot, shift_out)
+    !-----------------------------------------------------------------------
+    ! Build V_colin = V_d - V_p with vacuum alignment for 2D systems.
+    !
+    ! For a slab geometry with vacuum along z:
+    !   1. Compute planar-averaged V_d(z) and V_p(z)
+    !   2. Find the z-plane furthest from any atom (vacuum)
+    !   3. shift = V_p(z_vac) - V_d(z_vac)
+    !   4. V_colin = V_d - V_p + shift
+    !
+    ! Uses pristine cell atoms to locate the vacuum (more atoms → cleaner).
+    !-----------------------------------------------------------------------
+    USE io_global, ONLY : ionode, stdout
+    USE edic_mod, ONLY : V_file
+    IMPLICIT NONE
+
+    TYPE(V_file), INTENT(IN) :: vf_d, vf_p
+    INTEGER, INTENT(IN) :: nrtot
+    REAL(dp), INTENT(OUT) :: vcolin(nrtot)
+    REAL(dp), INTENT(OUT) :: shift_out
+
+    INTEGER :: irz, ia, nr1, nr2, nr3, nxy, iz_vac
+    REAL(dp) :: z_frac_grid, z_frac_atom, d, dmin, max_dmin
+    REAL(dp), ALLOCATABLE :: vavg_d(:), vavg_p(:)
+
+    nr1 = vf_d%nr1
+    nr2 = vf_d%nr2
+    nr3 = vf_d%nr3
+    nxy = nr1 * nr2
+
+    ! Planar-averaged potential along z for both supercells
+    ALLOCATE(vavg_d(0:nr3-1), vavg_p(0:nr3-1))
+    DO irz = 0, nr3 - 1
+       vavg_d(irz) = SUM(vf_d%pot(irz*nxy+1 : (irz+1)*nxy)) / DBLE(nxy)
+       vavg_p(irz) = SUM(vf_p%pot(irz*nxy+1 : (irz+1)*nxy)) / DBLE(nxy)
+    ENDDO
+
+    ! Find z-plane furthest from any atom (pristine cell)
+    iz_vac = 0
+    max_dmin = -1.0_dp
+    DO irz = 0, nr3 - 1
+       z_frac_grid = DBLE(irz) / DBLE(nr3)
+       dmin = 1.0_dp
+       DO ia = 1, vf_p%nat
+          z_frac_atom = vf_p%tau(3, ia) / vf_p%at(3, 3)
+          d = ABS(z_frac_grid - z_frac_atom)
+          d = MIN(d, 1.0_dp - d)
+          IF (d < dmin) dmin = d
+       ENDDO
+       IF (dmin > max_dmin) THEN
+          max_dmin = dmin
+          iz_vac = irz
+       ENDIF
+    ENDDO
+
+    shift_out = vavg_p(iz_vac) - vavg_d(iz_vac)
+    vcolin(:) = vf_d%pot(1:nrtot) - vf_p%pot(1:nrtot) + shift_out
+
+    IF (ionode) THEN
+       WRITE(stdout, '(5X,A)')          '--- Vacuum alignment (2D) ---'
+       WRITE(stdout, '(5X,A,I6,A,F8.4)') &
+            '  Vacuum z-index: ', iz_vac, '  z_frac = ', DBLE(iz_vac)/DBLE(nr3)
+       WRITE(stdout, '(5X,A,F14.8,A)')  '  V_d(vac) planar avg = ', vavg_d(iz_vac), ' Ry'
+       WRITE(stdout, '(5X,A,F14.8,A)')  '  V_p(vac) planar avg = ', vavg_p(iz_vac), ' Ry'
+       WRITE(stdout, '(5X,A,F14.8,A)')  '  Alignment shift     = ', shift_out, ' Ry'
+       WRITE(stdout, '(5X,A)')          '-----------------------------'
+       FLUSH(stdout)
+    ENDIF
+
+    DEALLOCATE(vavg_d, vavg_p)
+
+  END SUBROUTINE build_vcolin_aligned
+
+
+  SUBROUTINE build_vcolin_corealign(vf_d, vf_p, vcolin, nrtot, shift_out, &
+                                     defect_center, r_avg)
+    !-----------------------------------------------------------------------
+    ! Build V_colin = V_d - V_p with core-site alignment (2D & 3D).
+    !
+    ! 1. Find the atom in the pristine cell furthest from defect_center
+    !    (minimum-image distance in the periodic supercell).
+    ! 2. Average V_d and V_p over grid points within a sphere of radius
+    !    r_avg (Bohr) around that atom.
+    ! 3. shift = V_p_avg - V_d_avg
+    ! 4. V_colin = V_d - V_p + shift
+    !-----------------------------------------------------------------------
+    USE io_global, ONLY : ionode, stdout
+    USE edic_mod, ONLY : V_file
+    IMPLICIT NONE
+
+    TYPE(V_file), INTENT(IN) :: vf_d, vf_p
+    INTEGER, INTENT(IN) :: nrtot
+    REAL(dp), INTENT(OUT) :: vcolin(nrtot)
+    REAL(dp), INTENT(OUT) :: shift_out
+    REAL(dp), INTENT(IN) :: defect_center(3)
+    REAL(dp), INTENT(IN) :: r_avg
+
+    INTEGER :: ia, ia_far, irx, iry, irz, inr, nsph
+    INTEGER :: nr1, nr2, nr3
+    REAL(dp) :: r_def_cart(3), dr(3), s(3), dist, max_dist
+    REAL(dp) :: r_far(3), r_grid(3), dr_grid(3), s_grid(3), dist_grid
+    REAL(dp) :: r_avg_alat, vd_sum, vp_sum
+    REAL(dp) :: at(3,3), bg(3,3), cross(3), det
+
+    at = vf_p%at
+    nr1 = vf_d%nr1
+    nr2 = vf_d%nr2
+    nr3 = vf_d%nr3
+
+    ! Compute reciprocal lattice vectors bg (without 2pi, in 1/alat)
+    ! bg(:,i) satisfies sum_j at(j,i)*bg(j,k) = delta(i,k)
+    cross(1) = at(2,2)*at(3,3) - at(3,2)*at(2,3)
+    cross(2) = at(3,2)*at(1,3) - at(1,2)*at(3,3)
+    cross(3) = at(1,2)*at(2,3) - at(2,2)*at(1,3)
+    det = at(1,1)*cross(1) + at(2,1)*cross(2) + at(3,1)*cross(3)
+
+    bg(1,1) = cross(1) / det
+    bg(2,1) = cross(2) / det
+    bg(3,1) = cross(3) / det
+
+    cross(1) = at(2,3)*at(3,1) - at(3,3)*at(2,1)
+    cross(2) = at(3,3)*at(1,1) - at(1,3)*at(3,1)
+    cross(3) = at(1,3)*at(2,1) - at(2,3)*at(1,1)
+    bg(1,2) = cross(1) / det
+    bg(2,2) = cross(2) / det
+    bg(3,2) = cross(3) / det
+
+    cross(1) = at(2,1)*at(3,2) - at(3,1)*at(2,2)
+    cross(2) = at(3,1)*at(1,2) - at(1,1)*at(3,2)
+    cross(3) = at(1,1)*at(2,2) - at(2,1)*at(1,2)
+    bg(1,3) = cross(1) / det
+    bg(2,3) = cross(2) / det
+    bg(3,3) = cross(3) / det
+
+    ! Convert defect center: fractional -> Cartesian (alat)
+    r_def_cart(:) = defect_center(1) * at(:,1) &
+                  + defect_center(2) * at(:,2) &
+                  + defect_center(3) * at(:,3)
+
+    ! Find pristine atom furthest from defect center (minimum image)
+    ia_far = 1
+    max_dist = -1.0_dp
+    DO ia = 1, vf_p%nat
+       dr(:) = vf_p%tau(:, ia) - r_def_cart(:)
+       ! Minimum image: convert to fractional, wrap, convert back
+       s(1) = bg(1,1)*dr(1) + bg(2,1)*dr(2) + bg(3,1)*dr(3)
+       s(2) = bg(1,2)*dr(1) + bg(2,2)*dr(2) + bg(3,2)*dr(3)
+       s(3) = bg(1,3)*dr(1) + bg(2,3)*dr(2) + bg(3,3)*dr(3)
+       s(:) = s(:) - NINT(s(:))
+       dr(:) = s(1)*at(:,1) + s(2)*at(:,2) + s(3)*at(:,3)
+       dist = SQRT(SUM(dr**2)) * vf_p%alat
+       IF (dist > max_dist) THEN
+          max_dist = dist
+          ia_far = ia
+          r_far(:) = vf_p%tau(:, ia)
+       ENDIF
+    ENDDO
+
+    ! Average V_d and V_p over grid points within r_avg of r_far
+    r_avg_alat = r_avg / vf_p%alat
+    vd_sum = 0.0_dp
+    vp_sum = 0.0_dp
+    nsph = 0
+
+    DO irz = 0, nr3 - 1
+       DO iry = 0, nr2 - 1
+          DO irx = 0, nr1 - 1
+             inr = irz * nr1 * nr2 + iry * nr1 + irx + 1
+             r_grid(:) = (DBLE(irx)/DBLE(nr1)) * at(:,1) &
+                        + (DBLE(iry)/DBLE(nr2)) * at(:,2) &
+                        + (DBLE(irz)/DBLE(nr3)) * at(:,3)
+             dr_grid(:) = r_grid(:) - r_far(:)
+             ! Minimum image
+             s_grid(1) = bg(1,1)*dr_grid(1) + bg(2,1)*dr_grid(2) + bg(3,1)*dr_grid(3)
+             s_grid(2) = bg(1,2)*dr_grid(1) + bg(2,2)*dr_grid(2) + bg(3,2)*dr_grid(3)
+             s_grid(3) = bg(1,3)*dr_grid(1) + bg(2,3)*dr_grid(2) + bg(3,3)*dr_grid(3)
+             s_grid(:) = s_grid(:) - NINT(s_grid(:))
+             dr_grid(:) = s_grid(1)*at(:,1) + s_grid(2)*at(:,2) + s_grid(3)*at(:,3)
+             dist_grid = SQRT(SUM(dr_grid**2))
+             IF (dist_grid <= r_avg_alat) THEN
+                vd_sum = vd_sum + vf_d%pot(inr)
+                vp_sum = vp_sum + vf_p%pot(inr)
+                nsph = nsph + 1
+             ENDIF
+          ENDDO
+       ENDDO
+    ENDDO
+
+    IF (nsph == 0) THEN
+       IF (ionode) WRITE(stdout, '(5X,A)') &
+            'WARNING: core_align_radius too small, no grid points found. Using shift=0.'
+       shift_out = 0.0_dp
+    ELSE
+       shift_out = (vp_sum - vd_sum) / DBLE(nsph)
+    ENDIF
+
+    vcolin(:) = vf_d%pot(1:nrtot) - vf_p%pot(1:nrtot) + shift_out
+
+    IF (ionode) THEN
+       WRITE(stdout, '(5X,A)')          '--- Core-site alignment ---'
+       WRITE(stdout, '(5X,A,I6,A,F10.4,A)') &
+            '  Reference atom: ', ia_far, &
+            '  dist from defect = ', max_dist, ' Bohr'
+       WRITE(stdout, '(5X,A,3F10.5)')   '  Atom position (alat): ', r_far
+       WRITE(stdout, '(5X,A,F8.3,A,I8)') &
+            '  Averaging radius = ', r_avg, ' Bohr,  grid points = ', nsph
+       WRITE(stdout, '(5X,A,F14.8,A)')  '  V_d(core) avg = ', vd_sum/DBLE(MAX(nsph,1)), ' Ry'
+       WRITE(stdout, '(5X,A,F14.8,A)')  '  V_p(core) avg = ', vp_sum/DBLE(MAX(nsph,1)), ' Ry'
+       WRITE(stdout, '(5X,A,F14.8,A)')  '  Alignment shift = ', shift_out, ' Ry'
+       WRITE(stdout, '(5X,A)')          '---------------------------'
+       FLUSH(stdout)
+    ENDIF
+
+  END SUBROUTINE build_vcolin_corealign
+
+
+  SUBROUTINE write_vcolin_cube(vf_ref, vcolin, nrtot, prefix_in)
+    !-----------------------------------------------------------------------
+    ! Write V_colin to a Gaussian cube file for visualization (VESTA, VMD).
+    ! Uses vf_ref (defect cell) for lattice vectors and atomic positions.
+    ! Coordinates are in Bohr; potential values are in Ry.
+    !-----------------------------------------------------------------------
+    USE io_global, ONLY : ionode, stdout
+    USE edic_mod, ONLY : V_file
+    IMPLICIT NONE
+
+    TYPE(V_file), INTENT(IN) :: vf_ref
+    INTEGER, INTENT(IN) :: nrtot
+    REAL(dp), INTENT(IN) :: vcolin(nrtot)
+    CHARACTER(LEN=*), INTENT(IN) :: prefix_in
+
+    INTEGER :: iunit, irx, iry, irz, ia, inr, nval
+    INTEGER :: nr1, nr2, nr3
+    REAL(dp) :: voxel(3)
+    CHARACTER(LEN=256) :: fname
+
+    IF (.NOT. ionode) RETURN
+
+    nr1 = vf_ref%nr1
+    nr2 = vf_ref%nr2
+    nr3 = vf_ref%nr3
+
+    fname = TRIM(prefix_in) // '_vcolin.cube'
+    iunit = 98
+    OPEN(iunit, FILE=TRIM(fname), STATUS='REPLACE', ACTION='WRITE')
+
+    WRITE(iunit, '(A)') 'V_colin = V_defect - V_pristine (vacuum-aligned) [Ry]'
+    WRITE(iunit, '(A)') 'Generated by EDI code'
+
+    WRITE(iunit, '(I5, 3F12.6)') vf_ref%nat, 0.0_dp, 0.0_dp, 0.0_dp
+
+    voxel(:) = vf_ref%at(:, 1) * vf_ref%alat / DBLE(nr1)
+    WRITE(iunit, '(I5, 3F12.6)') nr1, voxel
+    voxel(:) = vf_ref%at(:, 2) * vf_ref%alat / DBLE(nr2)
+    WRITE(iunit, '(I5, 3F12.6)') nr2, voxel
+    voxel(:) = vf_ref%at(:, 3) * vf_ref%alat / DBLE(nr3)
+    WRITE(iunit, '(I5, 3F12.6)') nr3, voxel
+
+    DO ia = 1, vf_ref%nat
+       WRITE(iunit, '(I5, 4F12.6)') vf_ref%ityp(ia), 0.0_dp, &
+            vf_ref%tau(1, ia) * vf_ref%alat, &
+            vf_ref%tau(2, ia) * vf_ref%alat, &
+            vf_ref%tau(3, ia) * vf_ref%alat
+    ENDDO
+
+    ! Cube format: outermost = axis 1, innermost = axis 3
+    DO irx = 0, nr1 - 1
+       DO iry = 0, nr2 - 1
+          nval = 0
+          DO irz = 0, nr3 - 1
+             inr = irz * nr1 * nr2 + iry * nr1 + irx + 1
+             WRITE(iunit, '(ES13.5)', ADVANCE='NO') vcolin(inr)
+             nval = nval + 1
+             IF (MOD(nval, 6) == 0) WRITE(iunit, *)
+          ENDDO
+          IF (MOD(nval, 6) /= 0) WRITE(iunit, *)
+       ENDDO
+    ENDDO
+
+    CLOSE(iunit)
+    WRITE(stdout, '(5X,A,A)') 'V_colin cube file written: ', TRIM(fname)
+    FLUSH(stdout)
+
+  END SUBROUTINE write_vcolin_cube
 
 
 END MODULE ed_coarse

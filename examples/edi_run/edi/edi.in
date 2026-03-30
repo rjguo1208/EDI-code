@@ -3,20 +3,28 @@
   edi_outdir = '../primitive/dout/'
 
   do_edmat = .true.
-  pristine_prefix = 'mos2_pristine'
-  pristine_outdir = '../pristine_super/dout/'
-  defect_prefix = 'mos2_defect'
-  defect_outdir = '../defect_super/dout/'
+!  pristine_prefix = 'mos2_pristine'
+!  pristine_outdir = '../pristine_super/dout/'
+!  defect_prefix = 'mos2_defect'
+!  defect_outdir = '../defect_super/dout/'
+
+  potfile_d = 'V_d.cube'
+  potfile_p = 'V_p.cube'
 
 
+  pot_align = 'vacuum'
+!  defect_center =  0.5000000000, 0.5000000000, 0.8781590376! 0.5, 0.5, 0.5
+!  core_align_radius = 1.0
+  
 
-  edwread = .false.
 
-  wannierize = .true.
+  edwread = .true.
+
+  wannierize = .false.
   nbndsub = 5
 
-  coarse_nk1 = 18
-  coarse_nk2 = 18
+  coarse_nk1 = 12
+  coarse_nk2 = 12
   coarse_nk3 = 1
 
   fine_nk1 = 300
@@ -52,18 +60,18 @@
   wdata(12) = 'conv_window = 4'
   wdata(13) = 'guiding_centres = .true.'
 
-!  edmat_interp_from_file = .true.
-!  filki_interp = 'ki.dat'
-!  filkf_interp = 'kf.dat'
+  edmat_interp_from_file = .true.
+  filki_interp = 'ki.dat'
+  filkf_interp = 'kf.dat'
  
 
     do_transport = .true.
     delta_method = 'gaussian'
     delta_sigma = 0.01
     
-    transport_win_max = -4.10       ! Fermi energy in eV (check from NSCF output)
+    transport_win_max = -4.05       ! Fermi energy in eV (check from NSCF output)
     transport_win_min = -4.25
-    carrier_conc =  1e10        
+    carrier_conc =  1e11        
     defect_conc = 1.0e12       ! defect concentration: 10^12 cm^-2 (for 2D)
     nstemp = 3                 ! number of temperatures
     temps(1) = 100.0

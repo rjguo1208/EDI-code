@@ -19,7 +19,7 @@ EDI uses the supercell approach to extract defect perturbation potentials, Wanni
 - **Spin-orbit coupling (SOC)** support: two-component spinor wavefunctions, `dvan_so` nonlocal pseudopotentials, automatic detection from QE save files
 - **MPI parallelization** with pool-based (ki, kf) pair distribution and panel broadcast for memory-efficient wavefunction sharing
 - **Automated setup**: Python scripts generate all supercell and primitive cell inputs from a single `scf.in`
-- **On-the-fly potential extraction** directly from QE save files (no intermediate `pp.x` step)
+- **One-shot potential extraction** by extract_pot.x
 
 ## Workflow
 <p align="center">
