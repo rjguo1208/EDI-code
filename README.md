@@ -150,7 +150,7 @@ EDI produces:
 | File | Description |
 |------|-------------|
 | `prefix_transport.dat` | Mobility vs temperature (SERTA and MRTA, xx and yy components) |
-| `prefix_scattering_rates.dat` | State-resolved inverse lifetimes 1/tau(n,k) and tau(n,k) |
+| `prefix_inv_tau.dat` | State-resolved inverse lifetimes 1/tau(n,k) and tau(n,k) |
 | `prefix_edmatw_2d.bin` | Wannier-basis matrix elements M(R_e, R_p), reusable with `edwread = .true.` |
 
 ## Input Reference
