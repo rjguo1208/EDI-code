@@ -40,7 +40,8 @@ echo '>>> Running EDI (edi.x)...'
 cd edi
 srun -n 1 $QEDIR/edi-dev/extract_pot.x < extract_pot.in > extract_pot.out
 
-srun -n $NPROC $EDI -nk $NPROC -i edi.in > edi.out 2>&1
+srun -n $NPROC $EDI -nk $NPROC -i edi.setup.in > edi.setup.out 
+srun -n $NPROC $EDI -nk $NPROC -i edi.in > edi.out 
 cd ..
 
 echo '>>> Done!'

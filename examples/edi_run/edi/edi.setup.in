@@ -18,17 +18,17 @@
   
 
 
-  edwread = .true.
+  edwread = .false.
 
-  wannierize = .false.
+  wannierize = .true.
   nbndsub = 5
 
   coarse_nk1 = 12
   coarse_nk2 = 12
   coarse_nk3 = 1
 
-  fine_nk1 = 48
-  fine_nk2 = 48
+  fine_nk1 = 300
+  fine_nk2 = 300
   fine_nk3 = 1
 
 
@@ -65,7 +65,7 @@
   filkf_interp = 'kf.dat'
  
 
-    do_transport = .true.
+    do_transport = .false.
     delta_method = 'gaussian'
     delta_sigma = 0.01
     
