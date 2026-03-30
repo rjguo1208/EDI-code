@@ -64,8 +64,6 @@ cd src
 make
 ```
 
-## Workflow
-
 A typical EDI calculation proceeds in four stages:
 
 ```
@@ -166,15 +164,25 @@ EDI reads a single Fortran namelist `&edinput_nml` from the input file.
 | `edi_prefix` | string | `'pwscf'` | Prefix of primitive cell QE calculation |
 | `edi_outdir` | string | `'./'` | Output directory containing primitive cell QE save data |
 
+### Supercell Potentials
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `potfile_d` | string | | Cube file for defect supercell potential (from `extract_pot.x`) |
+| `potfile_p` | string | | Cube file for pristine supercell potential (from `extract_pot.x`) |
+| `pot_align` | string | `'vacuum'` | Potential alignment: `'vacuum'` (2D), `'core'`, or `'none'` |
+| `defect_center(3)` | real | 0,0,0 | Defect center in supercell fractional coords (for `pot_align='core'`) |
+| `core_align_radius` | real | 2.0 | Averaging sphere radius in Bohr (for `pot_align='core'`) |
+
 ### Matrix Element Calculation
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `do_edmat` | logical | `.false.` | Compute matrix elements from supercell potentials |
-| `pristine_prefix` | string | | Prefix of pristine supercell calculation |
-| `pristine_outdir` | string | | Output directory of pristine supercell |
-| `defect_prefix` | string | | Prefix of defect supercell calculation |
-| `defect_outdir` | string | | Output directory of defect supercell |
+| `pristine_prefix` | string | | Prefix of pristine supercell calculation (for on-the-fly loading) |
+| `pristine_outdir` | string | | Output directory of pristine supercell (for on-the-fly loading) |
+| `defect_prefix` | string | | Prefix of defect supercell calculation (for on-the-fly loading) |
+| `defect_outdir` | string | | Output directory of defect supercell (for on-the-fly loading) |
 | `edwwrite` | logical | `.true.` | Write Wannier-basis M(R) to binary file after computation |
 | `edwread` | logical | `.false.` | Read M(R) from binary file, skipping recomputation |
 | `band_ed` | string | | Band range for direct calculation mode (e.g., `'13-17'`) |
@@ -225,7 +233,20 @@ EDI reads a single Fortran namelist `&edinput_nml` from the input file.
 
 ## Example Input
 
-Complete input for MoS2 S-vacancy transport calculation:
+### extract_pot.in (potential extraction, run with 1 MPI rank)
+
+```fortran
+&extract_pot_nml
+  defect_prefix   = 'mos2_defect'
+  defect_outdir   = '../defect_super/dout/'
+  pristine_prefix = 'mos2_pristine'
+  pristine_outdir = '../pristine_super/dout/'
+  potfile_d = 'V_d.cube'
+  potfile_p = 'V_p.cube'
+/
+```
+
+### edi.in (full calculation)
 
 ```fortran
 &edinput_nml
@@ -233,12 +254,13 @@ Complete input for MoS2 S-vacancy transport calculation:
   edi_prefix = 'mos2'
   edi_outdir = '../primitive/dout/'
 
-  ! Supercell potentials
+  ! Pre-extracted supercell potentials (from extract_pot.x)
+  potfile_d = 'V_d.cube'
+  potfile_p = 'V_p.cube'
+  pot_align = 'vacuum'
+
+  ! Matrix elements
   do_edmat = .true.
-  pristine_prefix = 'mos2_pristine'
-  pristine_outdir = '../pristine_super/dout/'
-  defect_prefix = 'mos2_defect'
-  defect_outdir = '../defect_super/dout/'
 
   ! Wannierization
   wannierize = .true.
@@ -275,12 +297,14 @@ Complete input for MoS2 S-vacancy transport calculation:
 /
 ```
 
-To reuse previously computed Wannier matrix elements (skip Part A):
+### Reuse previously computed Wannier matrix elements (skip Part A)
 
 ```fortran
 &edinput_nml
   edi_prefix = 'mos2'
   edi_outdir = '../primitive/dout/'
+  potfile_d = 'V_d.cube'
+  potfile_p = 'V_p.cube'
   edwread = .true.         ! read M(R) from file
   wannierize = .false.     ! reuse existing Wannier90 checkpoint
   nbndsub = 5
@@ -306,13 +330,19 @@ All Fortran source files are in `src/` (26 files):
 | `edi_input.f90` | Namelist parsing (`&edinput_nml`), parameter broadcasting |
 | `edic_mod.f90` | Shared data types (`V_file` for supercell potentials), workspace arrays |
 
+### Potential Extraction
+
+| File | Description |
+|------|-------------|
+| `extract_pot.f90` | Standalone program (`extract_pot.x`): reads QE save files and writes supercell KS potentials to cube files with full double precision. Run serially (1 MPI rank) before `edi.x`. |
+
 ### Matrix Elements
 
 | File | Description |
 |------|-------------|
-| `ed_coarse.f90` | Core computation: supercell potential folding, spinor FFT, double Fourier transform, panel broadcast MPI, direct/interpolation modes |
+| `ed_coarse.f90` | Core computation: supercell potential folding, spinor FFT, double Fourier transform, panel broadcast MPI, direct/interpolation modes, cube file reader |
 | `get_betavkb.f90` | Kleinman-Bylander beta projectors for nonlocal pseudopotentials |
-| `get_vloc_onthefly.f90` | On-the-fly extraction of supercell potentials (V_loc + V_xc) from QE save files |
+| `get_vloc_onthefly.f90` | On-the-fly extraction of supercell potentials (V_loc + V_xc) from QE save files (legacy, used when `potfile_d/p` not set) |
 
 ### Wannier Interpolation
 
