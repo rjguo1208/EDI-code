@@ -383,18 +383,18 @@ Program edi
 
      IF (edwread) THEN
         !=========================================================
-        ! edwread = .true.: Read M(R_e, R_p) from binary, skip Part A
+        ! edwread = .true.: Read M(R,Rp) from binary, skip Part A
         !=========================================================
         IF (ionode) THEN
            WRITE(stdout, '(/,5X,A)') REPEAT('-', 60)
-           WRITE(stdout, '(5X,A)') 'edwread = .TRUE. : reading M(R_e, R_p) from binary file'
+           WRITE(stdout, '(5X,A)') 'edwread = .TRUE. : reading M(R,Rp) from binary file'
            WRITE(stdout, '(5X,A)') REPEAT('-', 60)
            FLUSH(stdout)
         ENDIF
 
      ELSE
         !=========================================================
-        ! Part A: Load potentials and compute M(R_e, R_p)
+        ! Part A: Load potentials and compute M(R,Rp)
         !=========================================================
         IF (LEN_TRIM(potfile_d) > 0 .AND. LEN_TRIM(potfile_p) > 0) THEN
            IF (ionode) WRITE(stdout, '(5X,A)') 'Loading potentials from cube files...'
@@ -483,7 +483,7 @@ Program edi
               ! Part B: full-grid interpolation → output files
               IF (ionode) THEN
                  WRITE(stdout, '(/,5X,A)') REPEAT('-', 60)
-                 WRITE(stdout, '(5X,A)') 'Part B: interpolating M(R_e, R_p) on fine grid'
+                 WRITE(stdout, '(5X,A)') 'Part B: interpolating M(R,Rp) on fine grid'
                  WRITE(stdout, '(5X,A)') REPEAT('-', 60)
                  FLUSH(stdout)
               ENDIF

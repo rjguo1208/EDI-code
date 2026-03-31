@@ -219,14 +219,14 @@ CONTAINS
 
   SUBROUTINE edmatwan2bloch_2d(nbndsub, nrr, ndegen, edmatw_2d, cfac_ki, cfac_kf, edmatf)
     !-----------------------------------------------------------------------
-    ! Full double-FT Wannier → Bloch interpolation for M(R_e, R_p).
+    ! Full double-FT Wannier → Bloch interpolation for M(R, R').
     !
-    ! M_W(k_i, k_f) = Σ_{R_e, R_p} exp(ik_i·R_e) exp(-ik_f·R_p)
-    !                   × M(R_e, R_p) / [ndegen(R_e) · ndegen(R_p)]
+    ! M_W(k_i, k_f) = Σ_{R, R'} exp(ik_i·R) exp(-ik_f·R')
+    !                   × M(R, R') / [ndegen(R_e) · ndegen(R_p)]
     !
     ! cfac_ki(ir) = exp(+i k_i · R_ir)  — phase for initial k
     ! cfac_kf(ir) = exp(+i k_f · R_ir)  — phase for final k
-    ! Paper Eq.6 inverse: exp(-ik_i·R_e) × exp(+ik_f·R_p)
+    ! Paper Eq.6 inverse: exp(-ik_i·R) × exp(+ik_f·R')
     !   → uses CONJG(cfac_ki) for bra, cfac_kf for ket
     !-----------------------------------------------------------------------
     IMPLICIT NONE
@@ -244,11 +244,11 @@ CONTAINS
     DO ir_p = 1, nrr
        degp = DBLE(ndegen(ir_p))
        IF (degp < 0.5_dp) CYCLE
-       phase_p = cfac_kf(ir_p) / degp   ! exp(+ik_f·R_p) / ndeg_p  [paper Eq.6: ket = +]
+       phase_p = cfac_kf(ir_p) / degp   ! exp(+ik_f·R') / ndeg_p  [paper Eq.6: ket = +]
        DO ir_e = 1, nrr
           dege = DBLE(ndegen(ir_e))
           IF (dege < 0.5_dp) CYCLE
-          weight = CONJG(cfac_ki(ir_e)) / dege * phase_p  ! exp(-ik_i·R_e)/ndeg_e × exp(+ik_f·R_p)/ndeg_p  [paper Eq.6: bra = -]
+          weight = CONJG(cfac_ki(ir_e)) / dege * phase_p  ! exp(-ik_i·R)/ndeg_e × exp(+ik_f·R')/ndeg_p  [paper Eq.6: bra = -]
           edmatf(:,:) = edmatf(:,:) + weight * edmatw_2d(:,:,ir_e,ir_p)
        ENDDO
     ENDDO

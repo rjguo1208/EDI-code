@@ -260,9 +260,9 @@ CONTAINS
                                edmatw_2d, prefix_in)
     !-----------------------------------------------------------------------
     ! Full double-FT: M(k_i, k_f) for ALL (k_i, k_f) pairs on the coarse grid.
-    ! Computes M(R_e, R_p) via (paper Eq.5):
+    ! Computes M(R,Rp) via (paper Eq.5):
     !   M_W(k_i, k_f) = U†(k_i) · M_B(k_i, k_f) · U(k_f)
-    !   M(R_e, R_p) = (1/Nk²) Σ_{ki,kf} exp(+iki·R_e) exp(-ikf·R_p) M_W
+    !   M(R,Rp) = (1/Nk²) Σ_{ki,kf} exp(+iki·R) exp(-ikf·Rp) M_W
     !
     ! Pool-parallel: each pool handles its local k_i, broadcasts ψ(k_f).
     ! No clean_pw, no read_file_new — QE state preserved.
@@ -321,7 +321,7 @@ CONTAINS
 
     ! q-grid = k-grid (every k-point is a valid momentum transfer)
     nkf = nkstot
-    nrr_p = nrr_k  ! R_e and R_p on the same WS grid
+    nrr_p = nrr_k  ! R and R' on the same WS grid
     CALL MPI_Comm_rank(world_comm, my_rank, ierr_mpi)
     CALL MPI_Comm_size(world_comm, num_ranks, ierr_mpi)
     CALL fkbounds(nkstot, lower_bnd, upper_bnd)
@@ -332,7 +332,7 @@ CONTAINS
        WRITE(stdout, '(5X,A)')   REPEAT('=', 60)
        WRITE(stdout, '(5X,A,I6)') 'Nk_i = Nk_f = ', nkstot
        WRITE(stdout, '(5X,A,I4,A,I4)') 'nks=', nks, '  npool=', npool
-       WRITE(stdout, '(5X,A,I6)') 'nrr (R_e = R_p)=', nrr_k
+       WRITE(stdout, '(5X,A,I6)') 'nrr (R = Rp)=', nrr_k
        FLUSH(stdout)
     ENDIF
 
@@ -775,7 +775,7 @@ CONTAINS
        WRITE(stdout, '(5X,A)') 'All ki-kf pairs completed. Writing output...'
        CALL write_edmatw_2d_v2(nbndsub, nrr_k, nrr_p, irvec_k, irvec_k, &
                                 ndegen_k, ndegen_k, edmatw_2d, prefix_in)
-       ! Write full M(R_e,R_p) binary for edwread
+       ! Write full M(R,Rp) binary for edwread
        CALL write_edmatw_2d_bin(nbndsub, nrr_k, irvec_k, ndegen_k, &
                                  edmatw_2d, prefix_in)
        WRITE(stdout, '(5X,A)') REPEAT('=', 60)
@@ -881,7 +881,7 @@ CONTAINS
     iunit = 81
     fname = TRIM(prefix_in) // '_edmatw_2d.dat'
     OPEN(iunit, FILE=TRIM(fname), FORM='formatted')
-    WRITE(iunit, '(A)') '# M(R_e, R_p) from full double-FT'
+    WRITE(iunit, '(A)') '# M(R,Rp) from full double-FT'
     WRITE(iunit, '(I6, I6)') nbndsub, nrr
 
     DO ir_p = 1, nrr
@@ -891,12 +891,12 @@ CONTAINS
        ENDDO
     ENDDO
     CLOSE(iunit)
-    WRITE(stdout, '(5X,A,A)') 'M(R_e, R_p) written to ', TRIM(fname)
+    WRITE(stdout, '(5X,A,A)') 'M(R,Rp) written to ', TRIM(fname)
 
     ! Also write decay comparison
     fname = TRIM(prefix_in) // '_decay_2d.dat'
     OPEN(iunit, FILE=TRIM(fname), FORM='formatted')
-    WRITE(iunit, '(A)') '# |R_e|  |R_p|  max|M(R_e,R_p)|  (for comparison with diagonal)'
+    WRITE(iunit, '(A)') '# |R|  |Rp|  max|M(R,Rp)|  (for comparison with diagonal)'
     DO ir_p = 1, nrr
        DO ir_e = 1, nrr
           max_abs = MAXVAL(ABS(edmatw_2d(:,:,ir_e,ir_p)))
@@ -930,10 +930,10 @@ CONTAINS
 
     iunit = 81
 
-    ! Write decay data (|R_e| in Angstrom, |R_p| in Angstrom, max|M|)
+    ! Write decay data (|R| in Angstrom, |Rp| in Angstrom, max|M|)
     fname = TRIM(prefix_in) // '_decay_2d.dat'
     OPEN(iunit, FILE=TRIM(fname), FORM='formatted')
-    WRITE(iunit, '(A)') '# |R_e|(Ang)  |R_p|(Ang)  max|M(R_e,R_p)|'
+    WRITE(iunit, '(A)') '# |R|(Ang)  |Rp|(Ang)  max|M(R,Rp)|'
     DO ir_p = 1, nrr_p
        rvec_p = MATMUL(at, DBLE(irvec_p(:, ir_p))) * alat * bohr2ang
        rp_len = SQRT(DOT_PRODUCT(rvec_p, rvec_p))
@@ -954,7 +954,7 @@ CONTAINS
 
   SUBROUTINE write_edmatw_2d_bin(nbndsub, nrr, irvec, ndegen, edmatw_2d, prefix_in)
     !-----------------------------------------------------------------------
-    ! Write full M(R_e, R_p) in binary format for edwread restart.
+    ! Write full M(R,Rp) in binary format for edwread restart.
     !-----------------------------------------------------------------------
     USE io_global, ONLY : stdout
     IMPLICIT NONE
@@ -976,13 +976,13 @@ CONTAINS
     ENDDO
     WRITE(iunit) edmatw_2d
     CLOSE(iunit)
-    WRITE(stdout, '(5X,A,A)') 'M(R_e,R_p) binary written to ', TRIM(fname)
+    WRITE(stdout, '(5X,A,A)') 'M(R,Rp) binary written to ', TRIM(fname)
   END SUBROUTINE write_edmatw_2d_bin
 
 
   SUBROUTINE read_edmatw_2d_file(prefix_in, nbndsub, nrr, ndegen, irvec, edmatw_2d)
     !-----------------------------------------------------------------------
-    ! Read full M(R_e, R_p) from binary file.
+    ! Read full M(R,Rp) from binary file.
     ! Ionode reads, then broadcasts to all ranks (avoids filesystem races).
     !-----------------------------------------------------------------------
     USE io_global, ONLY : ionode, ionode_id, stdout
@@ -1025,7 +1025,7 @@ CONTAINS
     IF (ionode) THEN
        READ(iunit) edmatw_2d
        CLOSE(iunit)
-       WRITE(stdout, '(5X,A,A)') 'M(R_e,R_p) binary read from ', TRIM(fname)
+       WRITE(stdout, '(5X,A,A)') 'M(R,Rp) binary read from ', TRIM(fname)
        WRITE(stdout, '(5X,A,I4,A,I6)') '  nbndsub=', nbndsub, '  nrr=', nrr
     ENDIF
     CALL mp_bcast(edmatw_2d, ionode_id, world_comm)
@@ -1035,10 +1035,10 @@ CONTAINS
   SUBROUTINE ed_fine_interp_2d(nbndsub, nrr, irvec, ndegen, chw, edmatw_2d, &
                                 nk1f, nk2f, nk3f, prefix_in)
     !-----------------------------------------------------------------------
-    ! Part B with full double-FT M(R_e, R_p).
+    ! Part B with full double-FT M(R,Rp).
     !
     ! For each (k_i, k_f) on the fine grid:
-    !   M_W(k_i,k_f) = Σ_{R_e,R_p} exp(ik_i·R_e) exp(-ik_f·R_p) M(R_e,R_p)
+    !   M_W(k_i,k_f) = Σ_{R,R'} exp(ik_i·R) exp(-ik_f·Rp) M(R,Rp)
     !   Diagonalize H(k_i) → U(k_i), H(k_f) → U(k_f)
     !   M_B = U†(k_i) · M_W · U(k_f)
     !
@@ -1077,7 +1077,7 @@ CONTAINS
 
     IF (ionode) THEN
        WRITE(stdout, '(/,5X,A)') REPEAT('=', 60)
-       WRITE(stdout, '(5X,A)')   'Part B (2D): Interpolation using M(R_e, R_p)'
+       WRITE(stdout, '(5X,A)')   'Part B (2D): Interpolation using M(R,Rp)'
        WRITE(stdout, '(5X,A)')   REPEAT('=', 60)
        WRITE(stdout, '(5X,A,3I4,A,I8)') 'Fine k-grid: ', nk1f, nk2f, nk3f, &
             '  total: ', nktotf
@@ -1093,7 +1093,7 @@ CONTAINS
     IF (ionode) THEN
        fname = TRIM(prefix_in) // '_edmatf_2d.dat'
        OPEN(iunit_diag, FILE=TRIM(fname), FORM='formatted')
-       WRITE(iunit_diag, '(A)') '# Interpolated M from full double-FT M(R_e,R_p) — diagonal k_i=k_f'
+       WRITE(iunit_diag, '(A)') '# Interpolated M from full double-FT M(R,Rp) — diagonal k_i=k_f'
        WRITE(iunit_diag, '(A)') '# ik  kx  ky  kz  ibnd  jbnd  |M|^2  Re(M)  Im(M)'
 
        fname = TRIM(prefix_in) // '_edmat_scatter_2d.dat'
@@ -2485,7 +2485,7 @@ CONTAINS
                                   filki, filkf, prefix_in)
     !-----------------------------------------------------------------------
     ! Wannier interpolation from k-point files using full double-FT
-    ! M(R_e, R_p) via edmatwan2bloch_2d.
+    ! M(R,Rp) via edmatwan2bloch_2d.
     !-----------------------------------------------------------------------
     USE io_global, ONLY : ionode, stdout
     USE wan2bloch_edi, ONLY : get_cfac, hamwan2bloch_with_evec, edmatwan2bloch_2d
@@ -2513,7 +2513,7 @@ CONTAINS
     IF (ionode) THEN
        WRITE(stdout, '(/,5X,A)') REPEAT('=', 60)
        WRITE(stdout, '(5X,A)') 'Wannier interpolation from k-point files [double-FT]'
-       WRITE(stdout, '(5X,A)') '  Using M(R_e, R_p) with edmatwan2bloch_2d'
+       WRITE(stdout, '(5X,A)') '  Using M(R,Rp) with edmatwan2bloch_2d'
        WRITE(stdout, '(5X,A)') REPEAT('=', 60)
        WRITE(stdout, '(5X,A,I6,A,I6,A,I10)') &
             'nki=', nki, ' nkf=', nkf, ' pairs=', nki*nkf

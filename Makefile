@@ -4,7 +4,7 @@ default: all
 all: edi
 
 edi: pw
-	cd src && make && make extract_pot.x
+	cd src && make 
 
 pw: 
 	cd .. && make pw

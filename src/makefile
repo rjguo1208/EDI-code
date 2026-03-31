@@ -17,6 +17,7 @@ QEMODS = ../../Modules/libqemod.a\
     	 ../../dft-d3/libdftd3qe.a\
 
 MODULES = $(PWOBJS) $(QEMODS) $(W90LIB)
+PWLIBS  = $(PWOBJS) $(QEMODS) $(W90LIB)
 
 F90FLAGS_W90 = $(F90FLAGS) -D__WANLIB
 
@@ -37,10 +38,12 @@ SUBS = get_betavkb.f90 get_vloc_onthefly.f90
 
 OBJ = $(EDIMODS:.f90=.o) $(W90MODS:.f90=.o) $(SUBS:.f90=.o)
 
-EXE = edi.x
+# Default: build both edi.x and extract_pot.x
+.DEFAULT_GOAL := all
 
-.DEFAULT_GOAL := $(EXE)
+all: edi.x extract_pot.x
 
+# Main EDI executable
 pw2wan_edi.o: pw2wan_edi.f90
 	$(MPIF90) $(F90FLAGS_W90) -c pw2wan_edi.f90 -o pw2wan_edi.o
 
@@ -50,16 +53,22 @@ edi_pw2wan.o: edi_pw2wan.f90
 edi.o: edi.f90
 	$(MPIF90) $(F90FLAGS_W90) -c edi.f90 -o edi.o
 
-$(EXE): $(OBJ) pw2wan_edi.o edi_pw2wan.o edi.o
-	$(LD) $(LDFLAGS) -o $(EXE) $(OBJ) pw2wan_edi.o edi_pw2wan.o edi.o $(MODULES) $(LIBOBJS) $(QELIBS)
+edi.x: $(OBJ) pw2wan_edi.o edi_pw2wan.o edi.o
+	$(LD) $(LDFLAGS) -o edi.x $(OBJ) pw2wan_edi.o edi_pw2wan.o edi.o $(MODULES) $(LIBOBJS) $(QELIBS)
 
+# Potential extraction tool (serial)
+extract_pot.o: extract_pot.f90
+	$(MPIF90) $(F90FLAGS) -c extract_pot.f90 -o extract_pot.o
+
+extract_pot.x: extract_pot.o
+	$(LD) $(LDFLAGS) -o extract_pot.x extract_pot.o $(PWLIBS) $(LIBOBJS) $(QELIBS)
+
+# Test utilities
 test_sum_rule.o: test_sum_rule.f90
 	$(MPIF90) $(F90FLAGS) -c test_sum_rule.f90 -o test_sum_rule.o
 
 test_potential.o: test_potential.f90
 	$(MPIF90) $(F90FLAGS) -c test_potential.f90 -o test_potential.o
-
-PWLIBS = ../../PW/src/libpw.a $(QEMODS) $(W90LIB)
 
 edi_test_sr.x: test_sum_rule.o
 	$(LD) $(LDFLAGS) -o edi_test_sr.x test_sum_rule.o $(PWLIBS) $(LIBOBJS) $(QELIBS)
@@ -67,11 +76,5 @@ edi_test_sr.x: test_sum_rule.o
 edi_test_pot.x: test_potential.o
 	$(LD) $(LDFLAGS) -o edi_test_pot.x test_potential.o $(PWLIBS) $(LIBOBJS) $(QELIBS)
 
-extract_pot.o: extract_pot.f90
-	$(MPIF90) $(F90FLAGS) -c extract_pot.f90 -o extract_pot.o
-
-extract_pot.x: extract_pot.o
-	$(LD) $(LDFLAGS) -o extract_pot.x extract_pot.o $(PWLIBS) $(LIBOBJS) $(QELIBS)
-
 clean:
-	rm -f *.o *~ *.d *.mod *.i $(EXE) edi_test_sr.x
+	rm -f *.o *~ *.d *.mod *.i edi.x extract_pot.x edi_test_sr.x edi_test_pot.x
